@@ -19,8 +19,12 @@ use crate::DEFAULT_GZIP_LEVEL;
 /// Configuration for building an install initramfs.
 #[derive(Debug, Clone)]
 pub struct InstallConfig {
-    /// Path to rootfs staging directory (contains modules, systemd, firmware)
+    /// Path to rootfs staging directory (contains systemd, firmware)
     pub rootfs: PathBuf,
+
+    /// Optional path to kernel modules (if different from rootfs)
+    /// If None, uses rootfs/usr/lib/modules
+    pub modules_path: Option<PathBuf>,
 
     /// Output path for the initramfs
     pub output: PathBuf,
@@ -39,6 +43,7 @@ impl Default for InstallConfig {
     fn default() -> Self {
         Self {
             rootfs: PathBuf::from("rootfs-staging"),
+            modules_path: None,
             output: PathBuf::from("initramfs-installed.img"),
             module_preset: ModulePreset::Install,
             gzip_level: DEFAULT_GZIP_LEVEL,
@@ -96,9 +101,13 @@ pub fn build_install_initramfs(config: &InstallConfig, verbose: bool) -> Result<
         );
     }
 
-    // Find kernel version from modules directory
-    let modules_dir = config.rootfs.join("usr/lib/modules");
-    let kernel_version = find_kernel_version(&modules_dir)?;
+    // Find kernel modules directory (use modules_path if specified, otherwise rootfs)
+    let modules_base = config
+        .modules_path
+        .as_ref()
+        .map(|p| p.join("usr/lib/modules"))
+        .unwrap_or_else(|| config.rootfs.join("usr/lib/modules"));
+    let kernel_version = find_kernel_version(&modules_base)?;
 
     if verbose {
         println!("  Kernel version: {}", kernel_version);
@@ -116,8 +125,9 @@ pub fn build_install_initramfs(config: &InstallConfig, verbose: bool) -> Result<
     // 1. Create directory structure
     create_install_directory_structure(&initramfs_root, verbose)?;
 
-    // 2. Copy kernel modules
-    copy_install_modules(&config.rootfs, &initramfs_root, &kernel_version, config, verbose)?;
+    // 2. Copy kernel modules (from modules_path if specified, otherwise rootfs)
+    let modules_source = config.modules_path.as_ref().unwrap_or(&config.rootfs);
+    copy_install_modules(modules_source, &initramfs_root, &kernel_version, config, verbose)?;
 
     // 3. Copy firmware (optional)
     if config.include_firmware {

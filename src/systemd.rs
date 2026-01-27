@@ -144,6 +144,26 @@ pub fn copy_systemd(
         }
     }
 
+    // Create symlinks for systemd-specific libraries in /usr/lib64
+    // libsystemd-shared and libsystemd-core are in /usr/lib64/systemd/ which
+    // isn't in the default library search path, so we symlink them
+    let systemd_lib_dir = initramfs_root.join("usr/lib64/systemd");
+    let lib64_dir = initramfs_root.join("usr/lib64");
+    if systemd_lib_dir.exists() {
+        for entry in fs::read_dir(&systemd_lib_dir)? {
+            let entry = entry?;
+            let filename = entry.file_name();
+            let name = filename.to_string_lossy();
+            if name.starts_with("libsystemd-") && name.ends_with(".so") {
+                let target = format!("systemd/{}", name);
+                let link = lib64_dir.join(&*name);
+                if !link.exists() {
+                    std::os::unix::fs::symlink(&target, &link)?;
+                }
+            }
+        }
+    }
+
     if verbose {
         println!("  Copied systemd and dependencies");
     }

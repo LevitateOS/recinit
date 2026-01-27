@@ -71,6 +71,10 @@ enum Commands {
         #[arg(long)]
         rootfs: PathBuf,
 
+        /// Optional path to kernel modules (if different from rootfs)
+        #[arg(long)]
+        modules_path: Option<PathBuf>,
+
         /// Output path for initramfs
         #[arg(short, long, default_value = "initramfs-installed.img")]
         output: PathBuf,
@@ -135,6 +139,7 @@ fn main() -> Result<()> {
 
         Commands::BuildInstall {
             rootfs,
+            modules_path,
             output,
             modules,
             gzip_level,
@@ -144,6 +149,7 @@ fn main() -> Result<()> {
 
             let config = InstallConfig {
                 rootfs,
+                modules_path,
                 output,
                 module_preset,
                 gzip_level,
