@@ -165,7 +165,7 @@ if [ -n "$EMERGENCY" ]; then
 fi
 
 # Create mount points for overlay
-busybox mkdir -p /squashfs /live-overlay /overlay /overlay/upper /overlay/work /newroot
+busybox mkdir -p /rootfs /live-overlay /overlay /overlay/upper /overlay/work /newroot
 
 # Mount EROFS read-only
 # Busybox mount doesn't always support -o loop automatically, so we set up loop device manually
@@ -179,12 +179,12 @@ busybox echo "Running losetup..."
 if ! busybox losetup /dev/loop0 "/mnt{{ROOTFS_PATH}}"; then
     busybox echo "losetup failed, trying direct mount..."
     # Fall back to direct mount (kernel might handle it)
-    if ! busybox mount -t erofs -o ro "/mnt{{ROOTFS_PATH}}" /squashfs; then
+    if ! busybox mount -t erofs -o ro "/mnt{{ROOTFS_PATH}}" /rootfs; then
         emergency_shell "Failed to mount EROFS. Is CONFIG_EROFS_FS=y in kernel?"
     fi
 else
     msg "Mounting EROFS from loop device..."
-    if ! busybox mount -t erofs -o ro /dev/loop0 /squashfs; then
+    if ! busybox mount -t erofs -o ro /dev/loop0 /rootfs; then
         emergency_shell "Failed to mount EROFS. Is CONFIG_EROFS_FS=y in kernel?"
     fi
 fi
@@ -209,19 +209,19 @@ fi
 # 3. Upper (top): tmpfs - runtime writes (read-write)
 #
 # OverlayFS syntax: lowerdir=<higher>:<lower> (colon-separated, rightmost is lowest)
-# With live overlay: lowerdir=/live-overlay:/squashfs (mount point still named /squashfs)
-# Without live overlay: lowerdir=/squashfs (installed system)
+# With live overlay: lowerdir=/live-overlay:/rootfs (mount point still named /rootfs)
+# Without live overlay: lowerdir=/rootfs (installed system)
 msg "Creating overlay filesystem..."
 busybox mount -t tmpfs -o size=50% tmpfs /overlay
 busybox mkdir -p /overlay/upper /overlay/work
 
 if [ -n "$LIVE_OVERLAY" ]; then
     # THREE-LAYER OVERLAY (live boot):
-    # - /live-overlay takes precedence over /squashfs
+    # - /live-overlay takes precedence over /rootfs
     # - /overlay/upper takes precedence over everything (writes go here)
     msg "Using three-layer overlay (live boot with autologin)"
     if ! busybox mount -t overlay overlay \
-        -o lowerdir=/live-overlay:/squashfs,upperdir=/overlay/upper,workdir=/overlay/work \
+        -o lowerdir=/live-overlay:/rootfs,upperdir=/overlay/upper,workdir=/overlay/work \
         /newroot; then
         emergency_shell "Failed to create overlay. Is CONFIG_OVERLAY_FS=y in kernel?"
     fi
@@ -231,7 +231,7 @@ else
     # TWO-LAYER OVERLAY (shouldn't happen from ISO, but handle gracefully)
     msg "Using two-layer overlay (no live configs)"
     if ! busybox mount -t overlay overlay \
-        -o lowerdir=/squashfs,upperdir=/overlay/upper,workdir=/overlay/work \
+        -o lowerdir=/rootfs,upperdir=/overlay/upper,workdir=/overlay/work \
         /newroot; then
         emergency_shell "Failed to create overlay. Is CONFIG_OVERLAY_FS=y in kernel?"
     fi

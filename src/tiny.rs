@@ -3,7 +3,7 @@
 //! Builds a small (~5MB) busybox-based initramfs for live ISO boot.
 //! This initramfs:
 //! 1. Loads kernel modules for storage access
-//! 2. Finds and mounts the squashfs/erofs root filesystem
+//! 2. Finds and mounts the EROFS root filesystem
 //! 3. Creates an overlay for writable storage
 //! 4. switch_root to the live system
 
@@ -92,7 +92,7 @@ const INITRAMFS_DIRS: &[&str] = &[
     "tmp",
     "mnt",
     "lib/modules",
-    "squashfs",
+    "rootfs",
     "overlay",
     "newroot",
     "live-overlay",
@@ -202,9 +202,9 @@ fn copy_boot_modules(config: &TinyConfig, initramfs_root: &Path, verbose: bool) 
              \n\
              These kernel modules are REQUIRED for the ISO to boot:\n\
              - cdrom, sr_mod, virtio_scsi, isofs (CDROM access)\n\
-             - loop, squashfs, overlay (squashfs + overlay boot)\n\
+             - loop, squashfs, overlay (EROFS + overlay boot)\n\
              \n\
-             Without ALL of these, the initramfs cannot mount the squashfs.",
+             Without ALL of these, the initramfs cannot mount the EROFS rootfs.",
             missing
         );
     }

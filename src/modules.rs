@@ -1,7 +1,7 @@
 //! Kernel module presets and handling for initramfs.
 //!
 //! Provides predefined module lists for different boot scenarios:
-//! - **Live**: Minimal set for booting from ISO/CD with squashfs/erofs
+//! - **Live**: Minimal set for booting from ISO/CD with EROFS
 //! - **Install**: Full set for booting from installed disk
 //! - **Custom**: User-provided module list
 
@@ -13,7 +13,7 @@ use std::path::Path;
 /// Kernel module preset for initramfs building.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModulePreset {
-    /// Minimal modules for live ISO boot (CDROM, squashfs, overlay, virtio)
+    /// Minimal modules for live ISO boot (CDROM, EROFS, overlay, virtio)
     Live,
     /// Full modules for installed systems (NVMe, SATA, USB, ext4, xfs, btrfs)
     Install,
@@ -76,7 +76,8 @@ pub const LIVE_MODULES: &[&str] = &[
     "kernel/drivers/ata/ahci",
     // === Virtio block (QEMU virtual disks) ===
     "kernel/drivers/block/virtio_blk",
-    // === Loop, squashfs, overlay for live boot ===
+    // === Loop, EROFS, overlay for live boot ===
+    // NOTE: squashfs module kept for mounting Rocky Linux install.img during extraction
     "kernel/drivers/block/loop",
     "kernel/fs/squashfs/squashfs",
     "kernel/fs/overlayfs/overlay",
