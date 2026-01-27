@@ -152,6 +152,26 @@ pub fn build_install_initramfs(config: &InstallConfig, verbose: bool) -> Result<
         "NAME=\"LevitateOS initramfs\"\nVERSION=\"1.0\"\nID=levitateos\n",
     )?;
 
+    // 5c. Create minimal /etc/passwd and /etc/group (required by systemd/udev)
+    // Without these, systemd-udevd and other services may fail to start or
+    // run with incorrect permissions, causing /dev/disk/by-uuid to not be created
+    fs::write(
+        etc_dir.join("passwd"),
+        "root:x:0:0:root:/root:/bin/sh\nnobody:x:65534:65534:Nobody:/:/sbin/nologin\n",
+    )?;
+    fs::write(
+        etc_dir.join("group"),
+        "root:x:0:\ntty:x:5:\ndisk:x:6:\nwheel:x:10:\nnobody:x:65534:\n",
+    )?;
+    fs::write(etc_dir.join("shadow"), "root:*:19000:0:99999:7:::\n")?;
+
+    // 5d. Create /etc/nsswitch.conf (required for glibc user/group lookups)
+    // Without this, getpwnam/getgrnam may fail, causing udev rules to break
+    fs::write(
+        etc_dir.join("nsswitch.conf"),
+        "passwd:     files\ngroup:      files\nshadow:     files\nhosts:      files dns\n",
+    )?;
+
     // 6. Copy initrd systemd units
     copy_initrd_units(&config.rootfs, &initramfs_root, verbose)?;
 

@@ -73,14 +73,13 @@ impl Default for TinyConfig {
 }
 
 /// Default boot device probe order.
+///
+/// Uses the shared constant from distro-spec for consistency.
 pub fn default_boot_devices() -> Vec<String> {
-    vec![
-        "/dev/sr0".to_string(),     // CD/DVD drive
-        "/dev/sda".to_string(),     // First SATA/SCSI disk
-        "/dev/sdb".to_string(),     // Second SATA/SCSI disk
-        "/dev/vda".to_string(),     // VirtIO disk (QEMU)
-        "/dev/nvme0n1".to_string(), // NVMe drive
-    ]
+    distro_spec::shared::BOOT_DEVICE_PROBE_ORDER
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
 }
 
 /// Directories to create in initramfs root.

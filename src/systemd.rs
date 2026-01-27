@@ -156,7 +156,9 @@ pub fn copy_systemd(
             let entry = entry?;
             let filename = entry.file_name();
             let name = filename.to_string_lossy();
-            if name.starts_with("libsystemd-") && name.ends_with(".so") {
+            // Match versioned library names like libsystemd-core-257-13.el10.rocky.0.1.so
+            // The libraries have version suffixes, so check for .so anywhere in the name
+            if name.starts_with("libsystemd-") && name.contains(".so") {
                 let target = format!("systemd/{}", name);
                 let link = lib64_dir.join(&*name);
                 if !link.exists() {
