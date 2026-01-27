@@ -113,28 +113,6 @@ pub fn setup_busybox(
     Ok(())
 }
 
-/// Verify a busybox binary is valid.
-///
-/// Checks that the file exists, is executable, and responds to --help.
-pub fn verify_busybox(path: &Path) -> Result<bool> {
-    if !path.exists() {
-        return Ok(false);
-    }
-
-    let metadata = fs::metadata(path)?;
-    if metadata.permissions().mode() & 0o111 == 0 {
-        return Ok(false); // Not executable
-    }
-
-    // Try running --help
-    let output = Command::new(path).arg("--help").output();
-
-    match output {
-        Ok(o) => Ok(o.status.success() || String::from_utf8_lossy(&o.stdout).contains("BusyBox")),
-        Err(_) => Ok(false),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
