@@ -270,7 +270,7 @@ fn copy_install_modules(
     }
 
     let src_dir = rootfs_staging.join("usr/lib/modules").join(kernel_version);
-    let modules = config.module_preset.modules();
+    let modules = config.module_preset.module_paths();
 
     let (copied, builtin, missing) = copy_kernel_modules(
         &src_dir,

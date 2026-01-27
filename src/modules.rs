@@ -1,14 +1,15 @@
-//! Kernel module presets and handling for initramfs.
+//! Kernel module handling for initramfs.
 //!
-//! Provides predefined module lists for different boot scenarios:
-//! - **Live**: Minimal set for booting from ISO/CD with EROFS
-//! - **Install**: Full set for booting from installed disk
-//! - **Custom**: User-provided module list
+//! Uses module definitions from `distro-spec` (single source of truth)
+//! and provides copying functionality for building initramfs images.
 
 use anyhow::{bail, Context, Result};
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
+
+// Import module definitions from distro-spec (SINGLE SOURCE OF TRUTH)
+pub use distro_spec::shared::{module_path, INSTALL_MODULES, LIVE_MODULES};
 
 /// Kernel module preset for initramfs building.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,13 +31,31 @@ impl Default for ModulePreset {
 impl ModulePreset {
     /// Get the module paths for this preset.
     ///
-    /// Paths are relative to `/lib/modules/<kernel-version>/`.
+    /// Returns full kernel paths relative to `/lib/modules/<kernel-version>/`.
     /// Order matters - dependencies must be listed before modules that use them.
-    pub fn modules(&self) -> Vec<&str> {
+    pub fn module_paths(&self) -> Vec<&'static str> {
         match self {
-            Self::Live => LIVE_MODULES.to_vec(),
-            Self::Install => INSTALL_MODULES.to_vec(),
-            Self::Custom(list) => list.iter().map(|s| s.as_str()).collect(),
+            Self::Live => LIVE_MODULES
+                .iter()
+                .filter_map(|name| module_path(name))
+                .collect(),
+            Self::Install => INSTALL_MODULES
+                .iter()
+                .filter_map(|name| module_path(name))
+                .collect(),
+            Self::Custom(list) => list
+                .iter()
+                .filter_map(|name| module_path(name))
+                .collect(),
+        }
+    }
+
+    /// Get module names for this preset.
+    pub fn module_names(&self) -> &[&str] {
+        match self {
+            Self::Live => LIVE_MODULES,
+            Self::Install => INSTALL_MODULES,
+            Self::Custom(_) => &[], // Custom doesn't have static names
         }
     }
 
@@ -50,95 +69,13 @@ impl ModulePreset {
     }
 }
 
-/// Modules required for live ISO boot.
-///
-/// ORDER MATTERS: Dependencies must be listed before modules that use them.
-/// The initramfs uses `insmod` which requires dependencies to be loaded first.
-pub const LIVE_MODULES: &[&str] = &[
-    // === Virtio core (must be first for QEMU) ===
-    "kernel/drivers/virtio/virtio",
-    "kernel/drivers/virtio/virtio_ring",
-    "kernel/drivers/virtio/virtio_pci",
-    // === SCSI core (needed by sr_mod, sd_mod, virtio_scsi) ===
-    "kernel/drivers/scsi/scsi_mod",
-    // === CDROM/SCSI for ISO mount ===
-    "kernel/drivers/cdrom/cdrom",
-    "kernel/drivers/scsi/sr_mod",
-    "kernel/drivers/scsi/sd_mod",
-    "kernel/drivers/scsi/virtio_scsi",
-    "kernel/fs/isofs/isofs",
-    // === NVMe (modern SSDs) ===
-    "kernel/drivers/nvme/host/nvme-core",
-    "kernel/drivers/nvme/host/nvme",
-    // === SATA/AHCI ===
-    "kernel/drivers/ata/libata",
-    "kernel/drivers/ata/libahci",
-    "kernel/drivers/ata/ahci",
-    // === Virtio block (QEMU virtual disks) ===
-    "kernel/drivers/block/virtio_blk",
-    // === Loop, EROFS, overlay for live boot ===
-    // NOTE: squashfs module kept for mounting Rocky Linux install.img during extraction
-    "kernel/drivers/block/loop",
-    "kernel/fs/squashfs/squashfs",
-    "kernel/fs/overlayfs/overlay",
-];
-
-/// Modules required for installed system boot.
-///
-/// This is a superset of LIVE_MODULES with additional filesystem and
-/// storage drivers for booting from any hardware configuration.
-pub const INSTALL_MODULES: &[&str] = &[
-    // === Virtio core (must be first for QEMU) ===
-    "kernel/drivers/virtio/virtio",
-    "kernel/drivers/virtio/virtio_ring",
-    "kernel/drivers/virtio/virtio_pci",
-    // === SCSI core (needed by sd_mod, virtio_scsi, usb-storage) ===
-    "kernel/drivers/scsi/scsi_mod",
-    "kernel/drivers/scsi/sd_mod",
-    "kernel/drivers/scsi/virtio_scsi",
-    // === NVMe (modern SSDs) ===
-    "kernel/drivers/nvme/host/nvme-core",
-    "kernel/drivers/nvme/host/nvme",
-    // === SATA/AHCI ===
-    "kernel/drivers/ata/libata",
-    "kernel/drivers/ata/libahci",
-    "kernel/drivers/ata/ahci",
-    "kernel/drivers/ata/ata_piix",
-    // === Virtio block (QEMU virtual disks) ===
-    "kernel/drivers/block/virtio_blk",
-    // === USB Storage ===
-    "kernel/drivers/usb/common/usb-common",
-    "kernel/drivers/usb/core/usbcore",
-    "kernel/drivers/usb/host/xhci-hcd",
-    "kernel/drivers/usb/host/xhci-pci",
-    "kernel/drivers/usb/host/ehci-hcd",
-    "kernel/drivers/usb/host/ehci-pci",
-    "kernel/drivers/usb/storage/usb-storage",
-    // === HID (keyboards for LUKS prompts) ===
-    "kernel/drivers/hid/hid",
-    "kernel/drivers/hid/hid-generic",
-    "kernel/drivers/hid/usbhid/usbhid",
-    // === Filesystems ===
-    "kernel/fs/ext4/ext4",
-    "kernel/fs/xfs/xfs",
-    "kernel/fs/btrfs/btrfs",
-    "kernel/fs/fat/fat",
-    "kernel/fs/vfat/vfat",
-    "kernel/fs/nls/nls_cp437",
-    "kernel/fs/nls/nls_iso8859-1",
-    "kernel/fs/nls/nls_utf8",
-    // === Device Mapper (for future LUKS/LVM) ===
-    "kernel/drivers/md/dm-mod",
-    "kernel/drivers/md/dm-crypt",
-];
-
 /// Copy kernel modules from source to initramfs.
 ///
 /// # Arguments
 ///
 /// * `modules_dir` - Path to kernel modules (e.g., /lib/modules/6.12.0)
 /// * `initramfs_root` - Root of the initramfs being built
-/// * `modules` - List of module paths (relative to kernel version dir)
+/// * `module_paths` - List of module paths (relative to kernel version dir)
 /// * `builtin_check` - If true, skip modules that are built-in to the kernel
 ///
 /// # Returns
@@ -147,7 +84,7 @@ pub const INSTALL_MODULES: &[&str] = &[
 pub fn copy_kernel_modules(
     modules_dir: &Path,
     initramfs_root: &Path,
-    modules: &[&str],
+    module_paths: &[&str],
     builtin_check: bool,
 ) -> Result<(usize, usize, Vec<String>)> {
     // Validate source directory
@@ -188,7 +125,7 @@ pub fn copy_kernel_modules(
     let mut builtin_count = 0;
     let mut missing = Vec::new();
 
-    for module_path in modules {
+    for module_path in module_paths {
         // Get base path without extension
         let base_path = module_path
             .trim_end_matches(".ko.xz")
@@ -204,7 +141,7 @@ pub fn copy_kernel_modules(
 
         // Try to find module with different extensions
         let mut found = false;
-        for ext in [".ko", ".ko.xz", ".ko.gz"] {
+        for ext in [".ko", ".ko.xz", ".ko.gz", ".ko.zst"] {
             let src = modules_dir.join(format!("{}{}", base_path, ext));
             if src.exists() {
                 let dst = dst_dir.join(format!("{}{}", base_path, ext));
@@ -236,13 +173,14 @@ pub fn copy_kernel_modules(
 
 /// Extract module name from full path.
 ///
-/// Example: "kernel/fs/squashfs/squashfs.ko.xz" -> "squashfs"
+/// Example: "kernel/fs/ext4/ext4.ko.xz" -> "ext4"
 pub fn module_name(path: &str) -> &str {
     path.rsplit('/')
         .next()
         .unwrap_or(path)
         .trim_end_matches(".ko.xz")
         .trim_end_matches(".ko.gz")
+        .trim_end_matches(".ko.zst")
         .trim_end_matches(".ko")
 }
 
@@ -252,9 +190,9 @@ mod tests {
 
     #[test]
     fn test_module_name() {
-        assert_eq!(module_name("kernel/fs/squashfs/squashfs.ko.xz"), "squashfs");
+        assert_eq!(module_name("kernel/fs/ext4/ext4.ko.xz"), "ext4");
         assert_eq!(module_name("kernel/drivers/virtio/virtio.ko"), "virtio");
-        assert_eq!(module_name("squashfs"), "squashfs");
+        assert_eq!(module_name("overlay"), "overlay");
     }
 
     #[test]
@@ -268,22 +206,28 @@ mod tests {
     }
 
     #[test]
-    fn test_live_modules_includes_essentials() {
-        let modules = LIVE_MODULES;
-        // Check that essential modules are present
-        assert!(modules.iter().any(|m| m.contains("squashfs")));
-        assert!(modules.iter().any(|m| m.contains("overlay")));
-        assert!(modules.iter().any(|m| m.contains("loop")));
-        assert!(modules.iter().any(|m| m.contains("virtio")));
+    fn test_live_modules_from_distro_spec() {
+        // Verify we're using distro-spec constants
+        assert!(LIVE_MODULES.contains(&"virtio"));
+        assert!(LIVE_MODULES.contains(&"overlay"));
+        assert!(LIVE_MODULES.contains(&"loop"));
     }
 
     #[test]
-    fn test_install_modules_superset_of_storage() {
-        let modules = INSTALL_MODULES;
-        // Install modules should have filesystem drivers
-        assert!(modules.iter().any(|m| m.contains("ext4")));
-        assert!(modules.iter().any(|m| m.contains("xfs")));
-        assert!(modules.iter().any(|m| m.contains("nvme")));
-        assert!(modules.iter().any(|m| m.contains("ahci")));
+    fn test_install_modules_from_distro_spec() {
+        // Verify we're using distro-spec constants
+        assert!(INSTALL_MODULES.contains(&"ext4"));
+        assert!(INSTALL_MODULES.contains(&"xfs"));
+        assert!(INSTALL_MODULES.contains(&"nvme"));
+        assert!(INSTALL_MODULES.contains(&"ahci"));
+    }
+
+    #[test]
+    fn test_module_paths_generated() {
+        let preset = ModulePreset::Live;
+        let paths = preset.module_paths();
+        // Should have paths for most modules (some may be built-in)
+        assert!(!paths.is_empty());
+        assert!(paths.iter().any(|p| p.contains("virtio")));
     }
 }

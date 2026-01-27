@@ -99,7 +99,7 @@ Minimal modules for booting from ISO/CD:
 - Virtio (QEMU support)
 - SCSI/CDROM (ISO mounting)
 - NVMe/SATA (real hardware)
-- Loop, squashfs, overlay (live boot)
+- Loop, EROFS, overlay (live boot)
 
 ### Install (Full)
 

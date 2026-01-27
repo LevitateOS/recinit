@@ -185,7 +185,7 @@ fn copy_boot_modules(config: &TinyConfig, initramfs_root: &Path, verbose: bool) 
         println!("Copying boot kernel modules...");
     }
 
-    let modules = config.module_preset.modules();
+    let modules = config.module_preset.module_paths();
 
     let (copied, builtin, missing) = copy_kernel_modules(
         &config.modules_dir,
@@ -201,7 +201,7 @@ fn copy_boot_modules(config: &TinyConfig, initramfs_root: &Path, verbose: bool) 
              \n\
              These kernel modules are REQUIRED for the ISO to boot:\n\
              - cdrom, sr_mod, virtio_scsi, isofs (CDROM access)\n\
-             - loop, squashfs, overlay (EROFS + overlay boot)\n\
+             - loop, erofs, overlay (EROFS + overlay boot)\n\
              \n\
              Without ALL of these, the initramfs cannot mount the EROFS rootfs.",
             missing
@@ -234,7 +234,7 @@ fn create_init_script(config: &TinyConfig, initramfs_root: &Path, verbose: bool)
     // Get module names from paths
     let module_names: Vec<&str> = config
         .module_preset
-        .modules()
+        .module_paths()
         .iter()
         .map(|m| module_name(m))
         .collect();

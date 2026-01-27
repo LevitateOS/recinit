@@ -3,7 +3,7 @@
 //! `recinit` builds initramfs images without requiring root privileges or
 //! external tools like dracut. It provides two types of initramfs:
 //!
-//! - **Tiny/Live initramfs**: Busybox-based, mounts squashfs/erofs for live ISOs
+//! - **Tiny/Live initramfs**: Busybox-based, mounts EROFS rootfs for live ISOs
 //! - **Install initramfs**: Systemd-based, boots from installed disk
 //!
 //! # Example
@@ -75,7 +75,7 @@ impl InitramfsBuilder {
     ///
     /// This creates a small (~5MB) busybox-based initramfs that:
     /// 1. Loads kernel modules for CDROM/storage access
-    /// 2. Finds and mounts the squashfs/erofs root filesystem
+    /// 2. Finds and mounts the EROFS root filesystem
     /// 3. Creates an overlay for writable storage
     /// 4. switch_root to the live system
     pub fn build_tiny(&self, config: TinyConfig) -> Result<()> {
