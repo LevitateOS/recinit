@@ -22,7 +22,9 @@ pub const SYSTEMD_FILES: &[&str] = &[
     "usr/lib/systemd/systemd-sulogin-shell",
     "usr/lib/systemd/systemd-shutdown",
     "usr/lib/systemd/systemd-executor",
+    "usr/lib/systemd/systemd-makefs",
     "usr/bin/systemctl",
+    "usr/bin/systemd-tmpfiles",
     "usr/bin/udevadm",
     "usr/sbin/modprobe",
     "usr/sbin/insmod",
@@ -200,20 +202,64 @@ pub fn copy_initrd_units(
         crate::elf::copy_dir_recursive(&udev_rules_src, &udev_rules_dst)?;
     }
 
-    // Copy systemd generators
+    // Copy udev helper programs (needed by udev rules for device identification)
+    copy_udev_helpers(rootfs_staging, initramfs_root, verbose)?;
+
+    // Copy tmpfiles.d (needed by systemd-tmpfiles for device node creation)
+    let tmpfiles_src = rootfs_staging.join("usr/lib/tmpfiles.d");
+    let tmpfiles_dst = initramfs_root.join("usr/lib/tmpfiles.d");
+    if tmpfiles_src.exists() {
+        fs::create_dir_all(&tmpfiles_dst)?;
+        // Copy only essential tmpfiles configs for initrd
+        for name in &["static-nodes-permissions.conf", "systemd.conf", "tmp.conf", "var.conf"] {
+            let src = tmpfiles_src.join(name);
+            let dst = tmpfiles_dst.join(name);
+            if src.exists() {
+                fs::copy(&src, &dst)?;
+            }
+        }
+        if verbose {
+            println!("  Copied tmpfiles.d configurations");
+        }
+    }
+
+    // Copy systemd generators (essential for parsing root= kernel parameter)
     let generators_src = rootfs_staging.join("usr/lib/systemd/system-generators");
     let generators_dst = initramfs_root.join("usr/lib/systemd/system-generators");
     if generators_src.exists() {
         fs::create_dir_all(&generators_dst)?;
-        for entry in fs::read_dir(&generators_src)? {
-            let entry = entry?;
-            let src = entry.path();
-            let dst = generators_dst.join(entry.file_name());
-            if src.is_file() {
+
+        // Essential generators for initrd boot
+        let essential_generators = [
+            "systemd-fstab-generator",
+            "systemd-gpt-auto-generator",
+            "systemd-debug-generator",
+        ];
+
+        let extra_lib_paths: &[&str] = &["usr/lib64/systemd"];
+
+        for gen_name in &essential_generators {
+            let src = generators_src.join(gen_name);
+            let dst = generators_dst.join(gen_name);
+            if src.exists() {
                 fs::copy(&src, &dst)?;
                 let mut perms = fs::metadata(&dst)?.permissions();
                 perms.set_mode(0o755);
                 fs::set_permissions(&dst, perms)?;
+
+                // Copy generator dependencies
+                let deps = get_all_dependencies(rootfs_staging, &src, extra_lib_paths)?;
+                for lib_name in deps {
+                    copy_library_to(
+                        rootfs_staging,
+                        &lib_name,
+                        initramfs_root,
+                        "usr/lib64",
+                        "usr/lib",
+                        extra_lib_paths,
+                        &["systemd"],
+                    )?;
+                }
             }
         }
     }
@@ -224,8 +270,137 @@ pub fn copy_initrd_units(
         std::os::unix::fs::symlink("initrd.target", &default_target)?;
     }
 
+    // Copy .wants directory symlinks (enables services during boot)
+    copy_wants_symlinks(rootfs_staging, initramfs_root, verbose)?;
+
     if verbose {
         println!("  Copied initrd units and udev rules");
+    }
+
+    Ok(())
+}
+
+/// Symlinks to copy from .wants directories to enable services during initrd boot.
+const INITRD_WANTS_SYMLINKS: &[(&str, &str)] = &[
+    // sysinit.target.wants - services needed during early boot
+    ("sysinit.target.wants/dev-hugepages.mount", "../dev-hugepages.mount"),
+    ("sysinit.target.wants/dev-mqueue.mount", "../dev-mqueue.mount"),
+    ("sysinit.target.wants/kmod-static-nodes.service", "../kmod-static-nodes.service"),
+    ("sysinit.target.wants/sys-kernel-config.mount", "../sys-kernel-config.mount"),
+    ("sysinit.target.wants/sys-kernel-debug.mount", "../sys-kernel-debug.mount"),
+    ("sysinit.target.wants/sys-kernel-tracing.mount", "../sys-kernel-tracing.mount"),
+    ("sysinit.target.wants/systemd-ask-password-console.path", "../systemd-ask-password-console.path"),
+    ("sysinit.target.wants/systemd-modules-load.service", "../systemd-modules-load.service"),
+    ("sysinit.target.wants/systemd-sysctl.service", "../systemd-sysctl.service"),
+    ("sysinit.target.wants/systemd-tmpfiles-setup-dev-early.service", "../systemd-tmpfiles-setup-dev-early.service"),
+    ("sysinit.target.wants/systemd-tmpfiles-setup-dev.service", "../systemd-tmpfiles-setup-dev.service"),
+    ("sysinit.target.wants/systemd-udevd.service", "../systemd-udevd.service"),
+    ("sysinit.target.wants/systemd-udev-trigger.service", "../systemd-udev-trigger.service"),
+    // sockets.target.wants - sockets needed during boot
+    ("sockets.target.wants/systemd-journald-dev-log.socket", "../systemd-journald-dev-log.socket"),
+    ("sockets.target.wants/systemd-journald.socket", "../systemd-journald.socket"),
+    ("sockets.target.wants/systemd-udevd-control.socket", "../systemd-udevd-control.socket"),
+    ("sockets.target.wants/systemd-udevd-kernel.socket", "../systemd-udevd-kernel.socket"),
+    // initrd.target.wants - initramfs-specific services
+    ("initrd.target.wants/initrd-parse-etc.service", "../initrd-parse-etc.service"),
+    ("initrd.target.wants/initrd-udevadm-cleanup-db.service", "../initrd-udevadm-cleanup-db.service"),
+    // initrd-switch-root.target.wants - switch_root services
+    ("initrd-switch-root.target.wants/initrd-cleanup.service", "../initrd-cleanup.service"),
+];
+
+/// Copy .wants directory symlinks to enable services.
+fn copy_wants_symlinks(
+    rootfs_staging: &Path,
+    initramfs_root: &Path,
+    verbose: bool,
+) -> Result<()> {
+    if verbose {
+        println!("  Enabling initrd services...");
+    }
+
+    let unit_dir = initramfs_root.join("usr/lib/systemd/system");
+    let mut created = 0;
+
+    for (link_path, target) in INITRD_WANTS_SYMLINKS {
+        let full_link_path = unit_dir.join(link_path);
+
+        // Ensure parent .wants directory exists
+        if let Some(parent) = full_link_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        // Check if the target unit exists in rootfs (skip if not available)
+        let target_name = link_path.rsplit('/').next().unwrap_or(link_path);
+        let target_unit = rootfs_staging.join("usr/lib/systemd/system").join(target_name);
+
+        if !target_unit.exists() {
+            continue; // Skip units that don't exist in source
+        }
+
+        // Copy the target unit if not already copied
+        let dst_unit = unit_dir.join(target_name);
+        if !dst_unit.exists() {
+            fs::copy(&target_unit, &dst_unit)?;
+        }
+
+        // Create the symlink
+        if !full_link_path.exists() {
+            std::os::unix::fs::symlink(target, &full_link_path)?;
+            created += 1;
+        }
+    }
+
+    // Post-process udev unit files to remove conditions that fail in initramfs
+    patch_udev_units(&unit_dir, verbose)?;
+
+    if verbose {
+        println!("    Enabled {} services via .wants symlinks", created);
+    }
+
+    Ok(())
+}
+
+/// Patch udev unit files to remove conditions that fail in initramfs.
+///
+/// The upstream udev unit files have `ConditionPathIsReadWrite=/sys` which
+/// fails during initramfs boot even though sysfs is properly mounted. This
+/// prevents udevd from starting, which breaks device detection.
+///
+/// Files patched:
+/// - systemd-udevd-control.socket
+/// - systemd-udevd-kernel.socket
+/// - systemd-udevd.service
+/// - systemd-udev-trigger.service
+fn patch_udev_units(unit_dir: &Path, verbose: bool) -> Result<()> {
+    let udev_units = [
+        "systemd-udevd-control.socket",
+        "systemd-udevd-kernel.socket",
+        "systemd-udevd.service",
+        "systemd-udev-trigger.service",
+    ];
+
+    for unit_name in &udev_units {
+        let unit_path = unit_dir.join(unit_name);
+        if unit_path.exists() {
+            let content = fs::read_to_string(&unit_path)?;
+
+            // Remove the ConditionPathIsReadWrite=/sys line specifically
+            // We keep other ConditionPathIsReadWrite lines (like ConditionPathIsReadWrite=!/
+            // in systemd-fsck-root.service) since they serve valid purposes
+            let patched: String = content
+                .lines()
+                .filter(|line| line.trim() != "ConditionPathIsReadWrite=/sys")
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            // Only write if we actually changed something
+            if patched != content {
+                fs::write(&unit_path, patched + "\n")?;
+                if verbose {
+                    println!("    Patched {} to remove ConditionPathIsReadWrite=/sys", unit_name);
+                }
+            }
+        }
     }
 
     Ok(())
@@ -251,6 +426,70 @@ pub fn copy_firmware(
         }
     } else if verbose {
         println!("  No firmware found (skipping)");
+    }
+
+    Ok(())
+}
+
+/// Udev helper programs needed for device identification.
+/// These are invoked by udev rules to probe device attributes.
+const UDEV_HELPERS: &[&str] = &[
+    "ata_id",    // ATA device identification
+    "scsi_id",   // SCSI device identification
+    "cdrom_id",  // CD/DVD detection
+    "mtd_probe", // MTD probe
+    "v4l_id",    // Video4Linux identification
+];
+
+/// Copy udev helper programs and their dependencies.
+fn copy_udev_helpers(
+    rootfs_staging: &Path,
+    initramfs_root: &Path,
+    verbose: bool,
+) -> Result<()> {
+    if verbose {
+        println!("  Copying udev helper programs...");
+    }
+
+    let src_dir = rootfs_staging.join("usr/lib/udev");
+    let dst_dir = initramfs_root.join("usr/lib/udev");
+    fs::create_dir_all(&dst_dir)?;
+
+    let extra_lib_paths: &[&str] = &[];
+    let mut copied = 0;
+
+    for helper in UDEV_HELPERS {
+        let src = src_dir.join(helper);
+        let dst = dst_dir.join(helper);
+
+        if src.exists() {
+            fs::copy(&src, &dst)?;
+
+            // Make executable
+            let mut perms = fs::metadata(&dst)?.permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&dst, perms)?;
+
+            // Copy library dependencies
+            let deps = get_all_dependencies(rootfs_staging, &src, extra_lib_paths)?;
+            for lib_name in deps {
+                copy_library_to(
+                    rootfs_staging,
+                    &lib_name,
+                    initramfs_root,
+                    "usr/lib64",
+                    "usr/lib",
+                    extra_lib_paths,
+                    &[],
+                )?;
+            }
+
+            copied += 1;
+        }
+    }
+
+    if verbose {
+        println!("  Copied {} udev helpers", copied);
     }
 
     Ok(())

@@ -143,6 +143,15 @@ pub fn build_install_initramfs(config: &InstallConfig, verbose: bool) -> Result<
         std::os::unix::fs::symlink("/usr/lib/systemd/systemd", &init_path)?;
     }
 
+    // 5b. Create /etc/initrd-release (required for systemd to recognize initrd)
+    // Without this, initrd-root-device.target assertion fails
+    let etc_dir = initramfs_root.join("etc");
+    fs::create_dir_all(&etc_dir)?;
+    fs::write(
+        etc_dir.join("initrd-release"),
+        "NAME=\"LevitateOS initramfs\"\nVERSION=\"1.0\"\nID=levitateos\n",
+    )?;
+
     // 6. Copy initrd systemd units
     copy_initrd_units(&config.rootfs, &initramfs_root, verbose)?;
 
