@@ -95,10 +95,7 @@ pub fn build_install_initramfs(config: &InstallConfig, verbose: bool) -> Result<
 
     // Verify rootfs exists
     if !config.rootfs.exists() {
-        bail!(
-            "rootfs directory not found at {}",
-            config.rootfs.display()
-        );
+        bail!("rootfs directory not found at {}", config.rootfs.display());
     }
 
     // Find kernel modules directory (use modules_path if specified, otherwise rootfs)
@@ -127,7 +124,13 @@ pub fn build_install_initramfs(config: &InstallConfig, verbose: bool) -> Result<
 
     // 2. Copy kernel modules (from modules_path if specified, otherwise rootfs)
     let modules_source = config.modules_path.as_ref().unwrap_or(&config.rootfs);
-    copy_install_modules(modules_source, &initramfs_root, &kernel_version, config, verbose)?;
+    copy_install_modules(
+        modules_source,
+        &initramfs_root,
+        &kernel_version,
+        config,
+        verbose,
+    )?;
 
     // 3. Copy firmware (optional)
     if config.include_firmware {

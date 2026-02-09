@@ -7,8 +7,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 use recinit::{
-    InitramfsBuilder, InstallConfig, ModulePreset, TinyConfig,
-    INSTALL_MODULES, LIVE_MODULES,
+    InitramfsBuilder, InstallConfig, ModulePreset, TinyConfig, INSTALL_MODULES, LIVE_MODULES,
 };
 
 #[derive(Parser)]
@@ -166,8 +165,14 @@ fn main() -> Result<()> {
         } => {
             if list_presets {
                 println!("Available module presets:");
-                println!("  live    - Minimal modules for live ISO boot ({} modules)", LIVE_MODULES.len());
-                println!("  install - Full modules for installed systems ({} modules)", INSTALL_MODULES.len());
+                println!(
+                    "  live    - Minimal modules for live ISO boot ({} modules)",
+                    LIVE_MODULES.len()
+                );
+                println!(
+                    "  install - Full modules for installed systems ({} modules)",
+                    INSTALL_MODULES.len()
+                );
                 return Ok(());
             }
 
@@ -175,10 +180,17 @@ fn main() -> Result<()> {
             let modules = match preset_name.as_str() {
                 "live" | "tiny" => LIVE_MODULES,
                 "install" | "full" => INSTALL_MODULES,
-                _ => bail!("Unknown preset: {}. Use --list-presets to see available options.", preset_name),
+                _ => bail!(
+                    "Unknown preset: {}. Use --list-presets to see available options.",
+                    preset_name
+                ),
             };
 
-            println!("Modules for '{}' preset ({} modules):", preset_name, modules.len());
+            println!(
+                "Modules for '{}' preset ({} modules):",
+                preset_name,
+                modules.len()
+            );
             for module in modules {
                 println!("  {}", module);
             }
@@ -191,7 +203,7 @@ fn main() -> Result<()> {
 /// Parse module preset from string.
 fn parse_module_preset(s: &str) -> Result<ModulePreset> {
     // Check for preset names
-    if let Some(preset) = ModulePreset::from_str(s) {
+    if let Some(preset) = ModulePreset::parse_name(s) {
         return Ok(preset);
     }
 

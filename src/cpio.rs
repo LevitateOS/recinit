@@ -39,7 +39,8 @@ const CPIO_HEADER_MAGIC: &str = "070701";
 /// )?;
 /// ```
 pub fn build_cpio(root: &Path, output: &Path, gzip_level: u32) -> Result<()> {
-    let file = File::create(output).with_context(|| format!("Failed to create {}", output.display()))?;
+    let file =
+        File::create(output).with_context(|| format!("Failed to create {}", output.display()))?;
     let encoder = GzEncoder::new(file, Compression::new(gzip_level));
     let mut writer = CpioWriter::new(encoder);
 
@@ -192,17 +193,17 @@ impl<W: Write> CpioWriter<W> {
     fn finish(mut self) -> Result<W> {
         // TRAILER!!! entry marks end of archive
         self.write_header(
-            0,                 // ino
-            0,                 // mode
-            0,                 // uid
-            0,                 // gid
-            1,                 // nlink
-            0,                 // mtime
-            0,                 // filesize
-            0,                 // dev_major
-            0,                 // dev_minor
-            0,                 // rdev_major
-            0,                 // rdev_minor
+            0, // ino
+            0, // mode
+            0, // uid
+            0, // gid
+            1, // nlink
+            0, // mtime
+            0, // filesize
+            0, // dev_major
+            0, // dev_minor
+            0, // rdev_major
+            0, // rdev_minor
             "TRAILER!!!",
         )?;
 

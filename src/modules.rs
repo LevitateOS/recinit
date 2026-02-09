@@ -12,20 +12,15 @@ use std::path::Path;
 pub use distro_spec::shared::{module_path, INSTALL_MODULES, LIVE_MODULES};
 
 /// Kernel module preset for initramfs building.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ModulePreset {
     /// Minimal modules for live ISO boot (CDROM, EROFS, overlay, virtio)
+    #[default]
     Live,
     /// Full modules for installed systems (NVMe, SATA, USB, ext4, xfs, btrfs)
     Install,
     /// Custom module list
     Custom(Vec<String>),
-}
-
-impl Default for ModulePreset {
-    fn default() -> Self {
-        Self::Live
-    }
 }
 
 impl ModulePreset {
@@ -43,10 +38,7 @@ impl ModulePreset {
                 .iter()
                 .filter_map(|name| module_path(name))
                 .collect(),
-            Self::Custom(list) => list
-                .iter()
-                .filter_map(|name| module_path(name))
-                .collect(),
+            Self::Custom(list) => list.iter().filter_map(|name| module_path(name)).collect(),
         }
     }
 
@@ -60,7 +52,7 @@ impl ModulePreset {
     }
 
     /// Parse a preset from string.
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse_name(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "live" | "tiny" => Some(Self::Live),
             "install" | "full" => Some(Self::Install),
@@ -101,9 +93,7 @@ pub fn copy_kernel_modules(
         .and_then(|n| n.to_str())
         .context("Cannot determine kernel version from modules path")?;
 
-    let dst_dir = initramfs_root
-        .join("lib/modules")
-        .join(kernel_version);
+    let dst_dir = initramfs_root.join("lib/modules").join(kernel_version);
     fs::create_dir_all(&dst_dir)?;
 
     // Load modules.builtin if checking for built-in modules
@@ -197,12 +187,18 @@ mod tests {
 
     #[test]
     fn test_preset_from_str() {
-        assert_eq!(ModulePreset::from_str("live"), Some(ModulePreset::Live));
-        assert_eq!(ModulePreset::from_str("LIVE"), Some(ModulePreset::Live));
-        assert_eq!(ModulePreset::from_str("tiny"), Some(ModulePreset::Live));
-        assert_eq!(ModulePreset::from_str("install"), Some(ModulePreset::Install));
-        assert_eq!(ModulePreset::from_str("full"), Some(ModulePreset::Install));
-        assert_eq!(ModulePreset::from_str("unknown"), None);
+        assert_eq!(ModulePreset::parse_name("live"), Some(ModulePreset::Live));
+        assert_eq!(ModulePreset::parse_name("LIVE"), Some(ModulePreset::Live));
+        assert_eq!(ModulePreset::parse_name("tiny"), Some(ModulePreset::Live));
+        assert_eq!(
+            ModulePreset::parse_name("install"),
+            Some(ModulePreset::Install)
+        );
+        assert_eq!(
+            ModulePreset::parse_name("full"),
+            Some(ModulePreset::Install)
+        );
+        assert_eq!(ModulePreset::parse_name("unknown"), None);
     }
 
     #[test]

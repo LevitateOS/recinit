@@ -83,11 +83,7 @@ pub const INITRD_UNITS: &[&str] = &[
 ];
 
 /// Copy systemd binaries and their dependencies to initramfs.
-pub fn copy_systemd(
-    rootfs_staging: &Path,
-    initramfs_root: &Path,
-    verbose: bool,
-) -> Result<()> {
+pub fn copy_systemd(rootfs_staging: &Path, initramfs_root: &Path, verbose: bool) -> Result<()> {
     if verbose {
         println!("Copying systemd for init...");
     }
@@ -213,7 +209,12 @@ pub fn copy_initrd_units(
     if tmpfiles_src.exists() {
         fs::create_dir_all(&tmpfiles_dst)?;
         // Copy only essential tmpfiles configs for initrd
-        for name in &["static-nodes-permissions.conf", "systemd.conf", "tmp.conf", "var.conf"] {
+        for name in &[
+            "static-nodes-permissions.conf",
+            "systemd.conf",
+            "tmp.conf",
+            "var.conf",
+        ] {
             let src = tmpfiles_src.join(name);
             let dst = tmpfiles_dst.join(name);
             if src.exists() {
@@ -285,37 +286,93 @@ pub fn copy_initrd_units(
 /// Symlinks to copy from .wants directories to enable services during initrd boot.
 const INITRD_WANTS_SYMLINKS: &[(&str, &str)] = &[
     // sysinit.target.wants - services needed during early boot
-    ("sysinit.target.wants/dev-hugepages.mount", "../dev-hugepages.mount"),
-    ("sysinit.target.wants/dev-mqueue.mount", "../dev-mqueue.mount"),
-    ("sysinit.target.wants/kmod-static-nodes.service", "../kmod-static-nodes.service"),
-    ("sysinit.target.wants/sys-kernel-config.mount", "../sys-kernel-config.mount"),
-    ("sysinit.target.wants/sys-kernel-debug.mount", "../sys-kernel-debug.mount"),
-    ("sysinit.target.wants/sys-kernel-tracing.mount", "../sys-kernel-tracing.mount"),
-    ("sysinit.target.wants/systemd-ask-password-console.path", "../systemd-ask-password-console.path"),
-    ("sysinit.target.wants/systemd-modules-load.service", "../systemd-modules-load.service"),
-    ("sysinit.target.wants/systemd-sysctl.service", "../systemd-sysctl.service"),
-    ("sysinit.target.wants/systemd-tmpfiles-setup-dev-early.service", "../systemd-tmpfiles-setup-dev-early.service"),
-    ("sysinit.target.wants/systemd-tmpfiles-setup-dev.service", "../systemd-tmpfiles-setup-dev.service"),
-    ("sysinit.target.wants/systemd-udevd.service", "../systemd-udevd.service"),
-    ("sysinit.target.wants/systemd-udev-trigger.service", "../systemd-udev-trigger.service"),
+    (
+        "sysinit.target.wants/dev-hugepages.mount",
+        "../dev-hugepages.mount",
+    ),
+    (
+        "sysinit.target.wants/dev-mqueue.mount",
+        "../dev-mqueue.mount",
+    ),
+    (
+        "sysinit.target.wants/kmod-static-nodes.service",
+        "../kmod-static-nodes.service",
+    ),
+    (
+        "sysinit.target.wants/sys-kernel-config.mount",
+        "../sys-kernel-config.mount",
+    ),
+    (
+        "sysinit.target.wants/sys-kernel-debug.mount",
+        "../sys-kernel-debug.mount",
+    ),
+    (
+        "sysinit.target.wants/sys-kernel-tracing.mount",
+        "../sys-kernel-tracing.mount",
+    ),
+    (
+        "sysinit.target.wants/systemd-ask-password-console.path",
+        "../systemd-ask-password-console.path",
+    ),
+    (
+        "sysinit.target.wants/systemd-modules-load.service",
+        "../systemd-modules-load.service",
+    ),
+    (
+        "sysinit.target.wants/systemd-sysctl.service",
+        "../systemd-sysctl.service",
+    ),
+    (
+        "sysinit.target.wants/systemd-tmpfiles-setup-dev-early.service",
+        "../systemd-tmpfiles-setup-dev-early.service",
+    ),
+    (
+        "sysinit.target.wants/systemd-tmpfiles-setup-dev.service",
+        "../systemd-tmpfiles-setup-dev.service",
+    ),
+    (
+        "sysinit.target.wants/systemd-udevd.service",
+        "../systemd-udevd.service",
+    ),
+    (
+        "sysinit.target.wants/systemd-udev-trigger.service",
+        "../systemd-udev-trigger.service",
+    ),
     // sockets.target.wants - sockets needed during boot
-    ("sockets.target.wants/systemd-journald-dev-log.socket", "../systemd-journald-dev-log.socket"),
-    ("sockets.target.wants/systemd-journald.socket", "../systemd-journald.socket"),
-    ("sockets.target.wants/systemd-udevd-control.socket", "../systemd-udevd-control.socket"),
-    ("sockets.target.wants/systemd-udevd-kernel.socket", "../systemd-udevd-kernel.socket"),
+    (
+        "sockets.target.wants/systemd-journald-dev-log.socket",
+        "../systemd-journald-dev-log.socket",
+    ),
+    (
+        "sockets.target.wants/systemd-journald.socket",
+        "../systemd-journald.socket",
+    ),
+    (
+        "sockets.target.wants/systemd-udevd-control.socket",
+        "../systemd-udevd-control.socket",
+    ),
+    (
+        "sockets.target.wants/systemd-udevd-kernel.socket",
+        "../systemd-udevd-kernel.socket",
+    ),
     // initrd.target.wants - initramfs-specific services
-    ("initrd.target.wants/initrd-parse-etc.service", "../initrd-parse-etc.service"),
-    ("initrd.target.wants/initrd-udevadm-cleanup-db.service", "../initrd-udevadm-cleanup-db.service"),
+    (
+        "initrd.target.wants/initrd-parse-etc.service",
+        "../initrd-parse-etc.service",
+    ),
+    (
+        "initrd.target.wants/initrd-udevadm-cleanup-db.service",
+        "../initrd-udevadm-cleanup-db.service",
+    ),
     // initrd-switch-root.target.wants - switch_root services
-    ("initrd-switch-root.target.wants/initrd-cleanup.service", "../initrd-cleanup.service"),
+    (
+        "initrd-switch-root.target.wants/initrd-cleanup.service",
+        "../initrd-cleanup.service",
+    ),
 ];
 
 /// Copy .wants directory symlinks to enable services.
-fn copy_wants_symlinks(
-    rootfs_staging: &Path,
-    initramfs_root: &Path,
-    verbose: bool,
-) -> Result<()> {
+fn copy_wants_symlinks(rootfs_staging: &Path, initramfs_root: &Path, verbose: bool) -> Result<()> {
     if verbose {
         println!("  Enabling initrd services...");
     }
@@ -333,7 +390,9 @@ fn copy_wants_symlinks(
 
         // Check if the target unit exists in rootfs (skip if not available)
         let target_name = link_path.rsplit('/').next().unwrap_or(link_path);
-        let target_unit = rootfs_staging.join("usr/lib/systemd/system").join(target_name);
+        let target_unit = rootfs_staging
+            .join("usr/lib/systemd/system")
+            .join(target_name);
 
         if !target_unit.exists() {
             continue; // Skip units that don't exist in source
@@ -399,7 +458,10 @@ fn patch_udev_units(unit_dir: &Path, verbose: bool) -> Result<()> {
             if patched != content {
                 fs::write(&unit_path, patched + "\n")?;
                 if verbose {
-                    println!("    Patched {} to remove ConditionPathIsReadWrite=/sys", unit_name);
+                    println!(
+                        "    Patched {} to remove ConditionPathIsReadWrite=/sys",
+                        unit_name
+                    );
                 }
             }
         }
@@ -409,11 +471,7 @@ fn patch_udev_units(unit_dir: &Path, verbose: bool) -> Result<()> {
 }
 
 /// Copy firmware directory (for hardware support).
-pub fn copy_firmware(
-    rootfs_staging: &Path,
-    initramfs_root: &Path,
-    verbose: bool,
-) -> Result<()> {
+pub fn copy_firmware(rootfs_staging: &Path, initramfs_root: &Path, verbose: bool) -> Result<()> {
     if verbose {
         println!("Copying firmware...");
     }
@@ -444,11 +502,7 @@ const UDEV_HELPERS: &[&str] = &[
 ];
 
 /// Copy udev helper programs and their dependencies.
-fn copy_udev_helpers(
-    rootfs_staging: &Path,
-    initramfs_root: &Path,
-    verbose: bool,
-) -> Result<()> {
+fn copy_udev_helpers(rootfs_staging: &Path, initramfs_root: &Path, verbose: bool) -> Result<()> {
     if verbose {
         println!("  Copying udev helper programs...");
     }
