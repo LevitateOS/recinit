@@ -11,6 +11,7 @@ use anyhow::{bail, Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::busybox::{download_and_cache_busybox, setup_busybox};
 use crate::cpio::build_cpio;
 use crate::modules::{copy_kernel_modules, ModulePreset};
 use crate::systemd::{copy_firmware, copy_initrd_units, copy_systemd};
@@ -85,6 +86,8 @@ const INSTALL_DIRS: &[&str] = &[
     // Udev
     "usr/lib/udev",
     "usr/lib/udev/rules.d",
+    // sysroot - systemd mounts root here before switch-root
+    "sysroot",
 ];
 
 /// Build install initramfs for booting from disk.
@@ -139,6 +142,11 @@ pub fn build_install_initramfs(config: &InstallConfig, verbose: bool) -> Result<
 
     // 4. Copy systemd and dependencies
     copy_systemd(&config.rootfs, &initramfs_root, verbose)?;
+
+    // 4b. Set up busybox for emergency shell
+    let cache_dir = config.output.parent().unwrap_or(Path::new("."));
+    let busybox_path = download_and_cache_busybox(cache_dir)?;
+    setup_busybox(&busybox_path, &initramfs_root, None)?;
 
     // 5. Create init symlink to systemd
     let init_path = initramfs_root.join("init");

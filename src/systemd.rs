@@ -36,6 +36,7 @@ pub const SYSTEMD_FILES: &[&str] = &[
     "usr/bin/mount",
     "usr/bin/umount",
     "usr/sbin/switch_root",
+    "usr/lib/systemd/systemd-sysroot-fstab-check",
     "usr/bin/bash",
     "usr/bin/sh",
 ];
