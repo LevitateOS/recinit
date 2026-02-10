@@ -52,6 +52,11 @@ pub struct TinyConfig {
 
     /// Whether to check for built-in modules
     pub check_builtin: bool,
+
+    /// Extra template variables for custom init scripts.
+    /// Each pair is (placeholder, value) where placeholder is WITHOUT braces
+    /// (e.g., "ROOT_PARTUUID" will replace `{{ROOT_PARTUUID}}`).
+    pub extra_template_vars: Vec<(String, String)>,
 }
 
 impl Default for TinyConfig {
@@ -68,6 +73,7 @@ impl Default for TinyConfig {
             module_preset: ModulePreset::Live,
             gzip_level: DEFAULT_GZIP_LEVEL,
             check_builtin: true,
+            extra_template_vars: Vec::new(),
         }
     }
 }
@@ -240,7 +246,7 @@ fn create_init_script(config: &TinyConfig, initramfs_root: &Path, verbose: bool)
         .collect();
 
     // Build the init script from template
-    let init_content = template
+    let mut init_content = template
         .replace("{{ISO_LABEL}}", &config.iso_label)
         .replace("{{ROOTFS_PATH}}", &format!("/{}", config.rootfs_path))
         .replace("{{BOOT_MODULES}}", &module_names.join(" "))
@@ -253,6 +259,11 @@ fn create_init_script(config: &TinyConfig, initramfs_root: &Path, verbose: bool)
                 .map(|p| format!("/{}", p))
                 .unwrap_or_default(),
         );
+
+    // Apply extra template variables
+    for (key, value) in &config.extra_template_vars {
+        init_content = init_content.replace(&format!("{{{{{}}}}}", key), value);
+    }
 
     let init_dst = initramfs_root.join("init");
     fs::write(&init_dst, &init_content)?;

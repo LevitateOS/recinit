@@ -161,6 +161,32 @@ pub fn copy_kernel_modules(
     Ok((copied, builtin_count, missing))
 }
 
+/// Find the kernel modules directory for a given base path.
+///
+/// Scans `base_modules_dir` (e.g., `output/staging/lib/modules/`) for the
+/// first directory entry, which is the kernel version directory.
+pub fn find_kernel_modules_dir(base_modules_dir: &Path) -> Result<std::path::PathBuf> {
+    if !base_modules_dir.exists() {
+        bail!(
+            "Kernel modules directory not found at {}",
+            base_modules_dir.display()
+        );
+    }
+
+    let kver = fs::read_dir(base_modules_dir)?
+        .filter_map(|e| e.ok())
+        .find(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().to_string());
+
+    match kver {
+        Some(ver) => Ok(base_modules_dir.join(ver)),
+        None => bail!(
+            "No kernel version directory found in {}",
+            base_modules_dir.display()
+        ),
+    }
+}
+
 /// Extract module name from full path.
 ///
 /// Example: "kernel/fs/ext4/ext4.ko.xz" -> "ext4"

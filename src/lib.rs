@@ -31,14 +31,17 @@ mod modules;
 mod systemd;
 mod tiny;
 
-pub use busybox::{download_busybox, setup_busybox, BUSYBOX_COMMANDS};
+pub use busybox::{
+    download_and_cache_busybox, download_busybox, setup_busybox, verify_sha256, BUSYBOX_COMMANDS,
+    BUSYBOX_SHA256, BUSYBOX_URL, BUSYBOX_URL_ENV,
+};
 pub use cpio::build_cpio;
 pub use elf::{
     copy_dir_recursive, copy_library_to, find_binary, find_library, get_all_dependencies,
     get_library_dependencies, make_executable,
 };
 pub use install::{build_install_initramfs, InstallConfig};
-pub use modules::{ModulePreset, INSTALL_MODULES, LIVE_MODULES};
+pub use modules::{find_kernel_modules_dir, ModulePreset, INSTALL_MODULES, LIVE_MODULES};
 pub use tiny::{build_tiny_initramfs, TinyConfig};
 
 use anyhow::Result;

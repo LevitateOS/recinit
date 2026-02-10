@@ -22,7 +22,9 @@ anyhow = "1.0"
 clap = { version = "4", features = ["derive"] }
 distro-spec = { path = "../../distro-spec" }
 flate2 = "1"
+hex = "0.4"
 leviso-elf = { path = "../../leviso-elf" }
+sha2 = "0.10"
 walkdir = "2"
 
 [dev-dependencies]

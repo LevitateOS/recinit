@@ -4,9 +4,11 @@
 //! in a single statically-linked binary.
 
 use anyhow::{bail, Context, Result};
+use sha2::{Digest, Sha256};
 use std::fs;
+use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Commands to symlink from busybox.
@@ -69,6 +71,69 @@ pub fn download_busybox(url: &str, dest: &Path) -> Result<()> {
     fs::set_permissions(dest, perms)?;
 
     Ok(())
+}
+
+/// Default busybox download URL.
+pub const BUSYBOX_URL: &str =
+    "https://busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox";
+
+/// SHA256 hash of the default busybox binary.
+pub const BUSYBOX_SHA256: &str = "6e123e7f3202a8c1e9b1f94d8941580a25135382b99e8d3e34fb858bba311348";
+
+/// Environment variable to override busybox URL.
+pub const BUSYBOX_URL_ENV: &str = "BUSYBOX_URL";
+
+/// Verify SHA256 hash of a file.
+pub fn verify_sha256(file: &Path, expected: &str) -> Result<()> {
+    let mut f = fs::File::open(file).with_context(|| format!("cannot open {}", file.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 1024 * 1024];
+
+    loop {
+        let n = f.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+    }
+
+    let hash = hex::encode(hasher.finalize());
+    if hash != expected.to_lowercase() {
+        bail!(
+            "SHA256 integrity check failed for '{}'\n  expected: {}\n  got:      {}",
+            file.display(),
+            expected.to_lowercase(),
+            hash
+        );
+    }
+    Ok(())
+}
+
+/// Download busybox to a cache directory, verifying SHA256 if using default URL.
+///
+/// Returns the path to the cached busybox binary.
+pub fn download_and_cache_busybox(cache_dir: &Path) -> Result<PathBuf> {
+    let cache_path = cache_dir.join("busybox-static");
+
+    if cache_path.exists() {
+        return Ok(cache_path);
+    }
+
+    let url = std::env::var(BUSYBOX_URL_ENV).unwrap_or_else(|_| BUSYBOX_URL.to_string());
+    let is_default_url = std::env::var(BUSYBOX_URL_ENV).is_err();
+
+    println!("  Downloading static busybox from {}", url);
+    download_busybox(&url, &cache_path)?;
+
+    if is_default_url {
+        println!("  Verifying checksum...");
+        verify_sha256(&cache_path, BUSYBOX_SHA256)
+            .context("Busybox checksum verification failed")?;
+    } else {
+        println!("  Skipping checksum (custom URL)");
+    }
+
+    Ok(cache_path)
 }
 
 /// Set up busybox in initramfs with command symlinks.
