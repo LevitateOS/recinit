@@ -38,7 +38,13 @@ pub struct TinyConfig {
     /// Path to rootfs inside ISO (e.g., "live/filesystem.erofs")
     pub rootfs_path: String,
 
-    /// Path to live overlay inside ISO (e.g., "live/overlay")
+    /// Path to live overlay payload image inside ISO (e.g., "live/overlayfs.erofs")
+    pub live_overlay_image_path: Option<String>,
+
+    /// Legacy alias for live overlay payload image path.
+    ///
+    /// Kept for compatibility with existing callers that still initialize
+    /// `TinyConfig` using `live_overlay_path`.
     pub live_overlay_path: Option<String>,
 
     /// Boot devices to probe in order
@@ -68,7 +74,8 @@ impl Default for TinyConfig {
             output: PathBuf::from("initramfs.cpio.gz"),
             iso_label: "LINUX".to_string(),
             rootfs_path: "live/filesystem.erofs".to_string(),
-            live_overlay_path: Some("live/overlay".to_string()),
+            live_overlay_image_path: Some(distro_spec::shared::LIVE_OVERLAYFS_ISO_PATH.to_string()),
+            live_overlay_path: Some(distro_spec::shared::LIVE_OVERLAYFS_ISO_PATH.to_string()),
             boot_devices: default_boot_devices(),
             module_preset: ModulePreset::Live,
             gzip_level: DEFAULT_GZIP_LEVEL,
@@ -246,19 +253,19 @@ fn create_init_script(config: &TinyConfig, initramfs_root: &Path, verbose: bool)
         .collect();
 
     // Build the init script from template
+    let overlay_image_path = config
+        .live_overlay_image_path
+        .as_ref()
+        .or(config.live_overlay_path.as_ref())
+        .map(|p| format!("/{}", p))
+        .unwrap_or_default();
+
     let mut init_content = template
         .replace("{{ISO_LABEL}}", &config.iso_label)
         .replace("{{ROOTFS_PATH}}", &format!("/{}", config.rootfs_path))
         .replace("{{BOOT_MODULES}}", &module_names.join(" "))
         .replace("{{BOOT_DEVICES}}", &config.boot_devices.join(" "))
-        .replace(
-            "{{LIVE_OVERLAY_PATH}}",
-            &config
-                .live_overlay_path
-                .as_ref()
-                .map(|p| format!("/{}", p))
-                .unwrap_or_default(),
-        );
+        .replace("{{LIVE_OVERLAY_IMAGE_PATH}}", &overlay_image_path);
 
     // Apply extra template variables
     for (key, value) in &config.extra_template_vars {

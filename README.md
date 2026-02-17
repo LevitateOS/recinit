@@ -119,7 +119,7 @@ The live initramfs uses a template-based init script with these variables:
 | `{{ROOTFS_PATH}}` | Path to rootfs inside ISO |
 | `{{BOOT_MODULES}}` | Space-separated module names |
 | `{{BOOT_DEVICES}}` | Space-separated device paths to probe |
-| `{{LIVE_OVERLAY_PATH}}` | Path to live overlay on ISO |
+| `{{LIVE_OVERLAY_IMAGE_PATH}}` | Path to live overlay payload image on ISO |
 
 ## Architecture
 

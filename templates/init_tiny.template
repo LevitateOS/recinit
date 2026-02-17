@@ -190,33 +190,45 @@ else
 fi
 busybox echo "EROFS mounted successfully"
 
-# Check for live overlay on ISO
+# Check for live overlay payload image on ISO.
 # This contains live-specific configs (autologin, serial console, empty root password)
-# that are NOT included in the EROFS base system
+# that are NOT included in the EROFS base system.
 LIVE_OVERLAY=""
-if [ -d "/mnt{{LIVE_OVERLAY_PATH}}" ]; then
-    msg "Found live overlay on ISO"
-    # Bind-mount the live overlay from ISO
-    busybox mount --bind "/mnt{{LIVE_OVERLAY_PATH}}" /live-overlay
+LIVE_OVERLAY_IMAGE="/mnt{{LIVE_OVERLAY_IMAGE_PATH}}"
+if [ -n "{{LIVE_OVERLAY_IMAGE_PATH}}" ] && [ -f "$LIVE_OVERLAY_IMAGE" ]; then
+    msg "Found live overlay payload image on ISO"
+    busybox mknod /dev/loop1 b 7 1 2>/dev/null || true
+
+    if ! busybox losetup /dev/loop1 "$LIVE_OVERLAY_IMAGE"; then
+        busybox echo "overlay losetup failed, trying direct mount..."
+        if ! busybox mount -t erofs -o ro "$LIVE_OVERLAY_IMAGE" /live-overlay; then
+            emergency_shell "Failed to mount live overlay payload image"
+        fi
+    else
+        if ! busybox mount -t erofs -o ro /dev/loop1 /live-overlay; then
+            emergency_shell "Failed to mount live overlay payload image"
+        fi
+    fi
+
     LIVE_OVERLAY="/live-overlay"
 else
-    msg "No live overlay found on ISO (installed system behavior)"
+    msg "No live overlay payload image found on ISO (installed system behavior)"
 fi
 
 # Create overlay filesystem with THREE layers:
 # 1. Lower (bottom): erofs - the base system (read-only)
-# 2. Middle: live-overlay - live-specific configs from ISO (read-only)
+# 2. Middle: live-overlay - live-specific configs from ISO payload image (read-only)
 # 3. Upper (top): tmpfs - runtime writes (read-write)
 #
 # OverlayFS syntax: lowerdir=<higher>:<lower> (colon-separated, rightmost is lowest)
-# With live overlay: lowerdir=/live-overlay:/rootfs (mount point still named /rootfs)
+# With live overlay payload: lowerdir=/live-overlay:/rootfs (mount point still named /rootfs)
 # Without live overlay: lowerdir=/rootfs (installed system)
 msg "Creating overlay filesystem..."
 busybox mount -t tmpfs -o size=50% tmpfs /overlay
 busybox mkdir -p /overlay/upper /overlay/work
 
 if [ -n "$LIVE_OVERLAY" ]; then
-    # THREE-LAYER OVERLAY (live boot):
+    # THREE-LAYER OVERLAY (live boot with payload image):
     # - /live-overlay takes precedence over /rootfs
     # - /overlay/upper takes precedence over everything (writes go here)
     msg "Using three-layer overlay (live boot with autologin)"

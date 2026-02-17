@@ -51,9 +51,9 @@ enum Commands {
         #[arg(long, default_value = "live/filesystem.erofs")]
         rootfs_path: String,
 
-        /// Path to live overlay inside ISO
+        /// Path to live overlay payload image inside ISO
         #[arg(long)]
-        live_overlay_path: Option<String>,
+        live_overlay_image_path: Option<String>,
 
         /// Gzip compression level (1-9)
         #[arg(long, default_value = "9")]
@@ -115,7 +115,7 @@ fn main() -> Result<()> {
             output,
             iso_label,
             rootfs_path,
-            live_overlay_path,
+            live_overlay_image_path,
             gzip_level,
             no_builtin_check,
         } => {
@@ -126,7 +126,7 @@ fn main() -> Result<()> {
                 output,
                 iso_label,
                 rootfs_path,
-                live_overlay_path,
+                live_overlay_image_path,
                 gzip_level,
                 check_builtin: !no_builtin_check,
                 ..Default::default()
