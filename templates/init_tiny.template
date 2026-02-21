@@ -322,6 +322,68 @@ busybox mkdir -p "$NEWROOT/run" "$NEWROOT/tmp"
 busybox mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs "$NEWROOT/run" 2>/dev/null || true
 busybox mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs "$NEWROOT/tmp" 2>/dev/null || true
 
+# Import optional host-provided boot injection payload.
+# Preferred channel:
+#   -fw_cfg name=opt/levitate/boot-injection,file=<payload.env>
+# Fallback channel:
+#   additional read-only ISO containing /boot-injection.env.
+# NOTE: this must run before moving /dev into $NEWROOT, otherwise /dev/sr*
+# nodes are no longer visible from the initramfs namespace.
+busybox mkdir -p "$NEWROOT/run/boot-injection"
+BOOT_INJECTION_PAYLOAD="$NEWROOT/run/boot-injection/payload.env"
+BOOT_INJECTION_RAW="/sys/firmware/qemu_fw_cfg/by_name/opt/levitate/boot-injection/raw"
+BOOT_INJECTION_IMPORTED=""
+
+if [ -r "$BOOT_INJECTION_RAW" ]; then
+    if busybox cat "$BOOT_INJECTION_RAW" > "$BOOT_INJECTION_PAYLOAD"; then
+        busybox chmod 0600 "$BOOT_INJECTION_PAYLOAD" 2>/dev/null || true
+        busybox echo "fw_cfg" > "$NEWROOT/run/boot-injection/source"
+        msg "Imported boot injection payload from fw_cfg"
+        BOOT_INJECTION_IMPORTED="1"
+    else
+        emergency_shell "Failed to import boot injection payload from fw_cfg"
+    fi
+fi
+
+if [ -z "$BOOT_INJECTION_IMPORTED" ]; then
+    BOOT_INJECTION_MEDIA_DIR="/boot-injection-media"
+    busybox mkdir -p "$BOOT_INJECTION_MEDIA_DIR"
+    for dev in /dev/sr1 /dev/sr2 /dev/sdb /dev/vdb; do
+        [ -b "$dev" ] || continue
+        if busybox mount -t iso9660 -o ro "$dev" "$BOOT_INJECTION_MEDIA_DIR" 2>/dev/null; then
+            if [ -r "$BOOT_INJECTION_MEDIA_DIR/boot-injection.env" ]; then
+                if busybox cat "$BOOT_INJECTION_MEDIA_DIR/boot-injection.env" > "$BOOT_INJECTION_PAYLOAD"; then
+                    busybox chmod 0600 "$BOOT_INJECTION_PAYLOAD" 2>/dev/null || true
+                    busybox echo "iso9660:$dev" > "$NEWROOT/run/boot-injection/source"
+                    msg "Imported boot injection payload from injection ISO ($dev)"
+                    BOOT_INJECTION_IMPORTED="1"
+                fi
+            fi
+            busybox umount "$BOOT_INJECTION_MEDIA_DIR" >/dev/null 2>&1 || true
+            [ -n "$BOOT_INJECTION_IMPORTED" ] && break
+        fi
+    done
+    busybox rmdir "$BOOT_INJECTION_MEDIA_DIR" >/dev/null 2>&1 || true
+fi
+
+if [ -r "$BOOT_INJECTION_PAYLOAD" ]; then
+    # First-class Stage 01 SSH key handoff: host injects SSH_AUTHORIZED_KEY
+    # (or SSH_AUTHORIZED_KEYS) and initramfs wires it into root authorized_keys.
+    SSH_KEYS="$(busybox sed -n \
+        -e 's/^SSH_AUTHORIZED_KEY=//p' \
+        -e 's/^SSH_AUTHORIZED_KEYS=//p' \
+        "$BOOT_INJECTION_PAYLOAD" 2>/dev/null)"
+    if [ -n "$SSH_KEYS" ]; then
+        busybox mkdir -p "$NEWROOT/root/.ssh"
+        busybox chmod 700 "$NEWROOT/root/.ssh" 2>/dev/null || true
+        busybox echo "$SSH_KEYS" | busybox tr ';' '\n' > "$NEWROOT/root/.ssh/authorized_keys"
+        busybox chmod 600 "$NEWROOT/root/.ssh/authorized_keys" 2>/dev/null || true
+        msg "Injected SSH authorized key(s) from boot payload"
+    fi
+elif [ -n "$BOOT_INJECTION_REQUIRED" ]; then
+    emergency_shell "Required boot injection payload missing (boot_injection=required)"
+fi
+
 # Prepare for switch_root
 msg "Preparing switch_root..."
 
@@ -340,36 +402,6 @@ busybox mount --move /sys "$NEWROOT/sys"
 # Keep ISO mounted at /run/live-media for installer boot assets.
 busybox mkdir -p "$NEWROOT/run/live-media"
 busybox mount --move /mnt "$NEWROOT/run/live-media"
-
-# Import optional host-provided boot injection payload from QEMU fw_cfg.
-# Host side injects this via:
-#   -fw_cfg name=opt/levitate/boot-injection,file=<payload.env>
-BOOT_INJECTION_RAW="/sys/firmware/qemu_fw_cfg/by_name/opt/levitate/boot-injection/raw"
-if [ -r "$BOOT_INJECTION_RAW" ]; then
-    busybox mkdir -p "$NEWROOT/run/boot-injection"
-    if busybox cat "$BOOT_INJECTION_RAW" > "$NEWROOT/run/boot-injection/payload.env"; then
-        busybox chmod 0600 "$NEWROOT/run/boot-injection/payload.env" 2>/dev/null || true
-        busybox echo "fw_cfg" > "$NEWROOT/run/boot-injection/source"
-        msg "Imported boot injection payload from fw_cfg"
-        # First-class Stage 01 SSH key handoff: host injects SSH_AUTHORIZED_KEY
-        # (or SSH_AUTHORIZED_KEYS) and initramfs wires it into root authorized_keys.
-        SSH_KEYS="$(busybox sed -n \
-            -e 's/^SSH_AUTHORIZED_KEY=//p' \
-            -e 's/^SSH_AUTHORIZED_KEYS=//p' \
-            "$NEWROOT/run/boot-injection/payload.env" 2>/dev/null)"
-        if [ -n "$SSH_KEYS" ]; then
-            busybox mkdir -p "$NEWROOT/root/.ssh"
-            busybox chmod 700 "$NEWROOT/root/.ssh" 2>/dev/null || true
-            busybox echo "$SSH_KEYS" | busybox tr ';' '\n' > "$NEWROOT/root/.ssh/authorized_keys"
-            busybox chmod 600 "$NEWROOT/root/.ssh/authorized_keys" 2>/dev/null || true
-            msg "Injected SSH authorized key(s) from boot payload"
-        fi
-    else
-        emergency_shell "Failed to import boot injection payload from fw_cfg"
-    fi
-elif [ -n "$BOOT_INJECTION_REQUIRED" ]; then
-    emergency_shell "Required boot injection payload missing (boot_injection=required)"
-fi
 
 # Verify init exists
 if [ ! -x "$NEWROOT/sbin/init" ] && [ ! -L "$NEWROOT/sbin/init" ]; then
