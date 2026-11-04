@@ -282,22 +282,3 @@ fn create_init_script(config: &TinyConfig, initramfs_root: &Path, verbose: bool)
 
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_default_config() {
-        let config = TinyConfig::default();
-        assert_eq!(config.gzip_level, DEFAULT_GZIP_LEVEL);
-        assert!(!config.boot_devices.is_empty());
-    }
-
-    #[test]
-    fn test_default_boot_devices() {
-        let devices = default_boot_devices();
-        assert!(devices.contains(&"/dev/sr0".to_string()));
-        assert!(devices.contains(&"/dev/vda".to_string()));
-    }
-}

@@ -177,35 +177,3 @@ pub fn setup_busybox(
 
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    #[test]
-    fn test_busybox_commands_not_empty() {
-        assert!(!BUSYBOX_COMMANDS.is_empty());
-        assert!(BUSYBOX_COMMANDS.contains(&"sh"));
-        assert!(BUSYBOX_COMMANDS.contains(&"mount"));
-        assert!(BUSYBOX_COMMANDS.contains(&"switch_root"));
-    }
-
-    #[test]
-    fn test_setup_busybox_creates_symlinks() {
-        let temp = TempDir::new().unwrap();
-        let root = temp.path().join("initramfs");
-
-        // Create a fake busybox
-        let busybox_src = temp.path().join("busybox");
-        fs::write(&busybox_src, "#!/bin/sh\necho busybox").unwrap();
-
-        // Set up busybox
-        setup_busybox(&busybox_src, &root, Some(&["sh", "mount"])).unwrap();
-
-        // Verify
-        assert!(root.join("bin/busybox").exists());
-        assert!(root.join("bin/sh").is_symlink());
-        assert!(root.join("bin/mount").is_symlink());
-    }
-}

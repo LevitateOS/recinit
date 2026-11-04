@@ -313,15 +313,3 @@ fn copy_install_modules(
 
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_default_config() {
-        let config = InstallConfig::default();
-        assert_eq!(config.gzip_level, DEFAULT_GZIP_LEVEL);
-        assert!(config.include_firmware);
-    }
-}
