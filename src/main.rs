@@ -75,6 +75,10 @@ enum Commands {
         #[arg(long)]
         rootfs: PathBuf,
 
+        /// Path to static busybox binary (emergency shell)
+        #[arg(long)]
+        busybox: PathBuf,
+
         /// Optional path to kernel modules (if different from rootfs)
         #[arg(long)]
         modules_path: Option<PathBuf>,
@@ -144,6 +148,7 @@ fn main() -> Result<()> {
 
         Commands::BuildInstall {
             rootfs,
+            busybox,
             modules_path,
             output,
             modules,
@@ -154,6 +159,7 @@ fn main() -> Result<()> {
 
             let config = InstallConfig {
                 rootfs,
+                busybox_path: busybox,
                 modules_path,
                 output,
                 module_preset,

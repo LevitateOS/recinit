@@ -94,7 +94,7 @@ pub fn build_tiny_initramfs(config: &TinyConfig, verbose: bool) -> Result<()> {
         if verbose {
             println!("Setting up busybox...");
         }
-        setup_busybox(&config.busybox_path, root, None)?;
+        setup_busybox(&config.busybox_path, root)?;
         copy_boot_modules(config, root, verbose)?;
         create_init_script(config, root, verbose)
     })?;

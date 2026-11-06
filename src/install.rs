@@ -11,7 +11,7 @@ use anyhow::{bail, Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::busybox::{download_and_cache_busybox, setup_busybox};
+use crate::busybox::setup_busybox;
 use crate::cpio::build_archive;
 use crate::modules::{copy_kernel_modules, ModulePreset};
 use crate::systemd::{copy_firmware, copy_initrd_units, copy_systemd};
@@ -21,6 +21,9 @@ use crate::systemd::{copy_firmware, copy_initrd_units, copy_systemd};
 pub struct InstallConfig {
     /// Path to rootfs staging directory (contains systemd, firmware)
     pub rootfs: PathBuf,
+
+    /// Path to static busybox binary (emergency shell)
+    pub busybox_path: PathBuf,
 
     /// Optional path to kernel modules (if different from rootfs)
     /// If None, uses rootfs/usr/lib/modules
@@ -122,9 +125,7 @@ pub fn build_install_initramfs(config: &InstallConfig, verbose: bool) -> Result<
         copy_systemd(&config.rootfs, root, verbose)?;
 
         // 4b. Set up busybox for emergency shell
-        let cache_dir = config.output.parent().unwrap_or(Path::new("."));
-        let busybox_path = download_and_cache_busybox(cache_dir)?;
-        setup_busybox(&busybox_path, root, None)?;
+        setup_busybox(&config.busybox_path, root)?;
 
         // 5. Create init symlink to systemd
         let init_path = root.join("init");
