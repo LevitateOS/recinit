@@ -35,9 +35,9 @@ enum Commands {
         #[arg(long)]
         busybox: PathBuf,
 
-        /// Path to init script template
+        /// Path to a custom init script template (default: the built-in one)
         #[arg(long)]
-        template: PathBuf,
+        template: Option<PathBuf>,
 
         /// Output path for initramfs
         #[arg(short, long, default_value = "initramfs.cpio.gz")]
@@ -47,13 +47,17 @@ enum Commands {
         #[arg(long, default_value = "LINUX")]
         iso_label: String,
 
-        /// Path to rootfs inside ISO (e.g., live/filesystem.erofs)
-        #[arg(long, default_value = "live/filesystem.erofs")]
+        /// Path to rootfs inside ISO
+        #[arg(long, default_value = distro_spec::shared::ROOTFS_ISO_PATH)]
         rootfs_path: String,
 
         /// Path to live overlay payload image inside ISO
-        #[arg(long)]
-        live_overlay_image_path: Option<String>,
+        #[arg(long, default_value = distro_spec::shared::LIVE_OVERLAYFS_ISO_PATH)]
+        live_overlay_image_path: String,
+
+        /// Set a template value (KEY=VALUE), e.g. BOOT_BANNER or PRODUCT_TAG
+        #[arg(long = "set", value_name = "KEY=VALUE", value_parser = parse_key_value)]
+        template_vars: Vec<(String, String)>,
 
         /// Gzip compression level (1-9)
         #[arg(long, default_value = "9")]
@@ -116,6 +120,7 @@ fn main() -> Result<()> {
             iso_label,
             rootfs_path,
             live_overlay_image_path,
+            template_vars,
             gzip_level,
             no_builtin_check,
         } => {
@@ -126,7 +131,8 @@ fn main() -> Result<()> {
                 output,
                 iso_label,
                 rootfs_path,
-                live_overlay_image_path,
+                live_overlay_image_path: Some(live_overlay_image_path),
+                extra_template_vars: template_vars,
                 gzip_level,
                 check_builtin: !no_builtin_check,
                 ..Default::default()
@@ -214,4 +220,11 @@ fn parse_module_preset(s: &str) -> Result<ModulePreset> {
     }
 
     Ok(ModulePreset::Custom(modules))
+}
+
+fn parse_key_value(arg: &str) -> std::result::Result<(String, String), String> {
+    let (key, value) = arg
+        .split_once('=')
+        .ok_or_else(|| format!("expected KEY=VALUE, got '{arg}'"))?;
+    Ok((key.to_string(), value.to_string()))
 }

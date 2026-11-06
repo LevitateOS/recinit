@@ -76,13 +76,11 @@ CMDLINE=$(busybox cat /proc/cmdline)
 busybox echo "CMDLINE: $CMDLINE"
 ROOT_LABEL=""
 EMERGENCY=""
-DEBUG="1"  # Always enable debug for now
 BOOT_INJECTION_REQUIRED=""
 for param in $CMDLINE; do
     case "$param" in
         root=LABEL=*) ROOT_LABEL="${param#root=LABEL=}" ;;
         emergency) EMERGENCY=1 ;;
-        debug) DEBUG=1 ;;
         boot_injection=required) BOOT_INJECTION_REQUIRED=1 ;;
     esac
 done
@@ -105,7 +103,7 @@ emergency_shell() {
     exec busybox sh
 }
 
-msg "LevitateOS initramfs starting..."
+msg "{{BOOT_BANNER}}"
 msg "Searching for boot device with label '$ROOT_LABEL'..."
 
 # Wait for block devices to appear (USB/SATA may be slow)
@@ -136,8 +134,7 @@ for dev in $DEVICES; do
         continue
     fi
 
-    VOL_LABEL="$(busybox cat /mnt/.disk_label 2>/dev/null)"
-    if [ "$VOL_LABEL" = "$ROOT_LABEL" ] || [ -d /mnt/boot ]; then
+    if [ -d /mnt/boot ]; then
         BOOT_DEV="$dev"
         msg "Found boot media device: $dev"
         break
@@ -183,13 +180,13 @@ find_payload_partition() {
     want="$1"
     for base in $DEVICES; do
         [ -b "$base" ] || continue
-        for n in 2 3 4; do
+        for n in {{PAYLOAD_PARTITIONS}}; do
             part="$(part_name "$base" "$n")"
             [ -b "$part" ] || continue
             if ! busybox mount -t erofs -o ro "$part" /probe 2>/dev/null; then
                 continue
             fi
-            role="$(busybox cat /probe/.live-payload-role 2>/dev/null)"
+            role="$(busybox cat /probe/{{PAYLOAD_ROLE_FILE}} 2>/dev/null)"
             busybox umount /probe 2>/dev/null
             if [ "$role" = "$want" ]; then
                 busybox echo "$part"
@@ -256,15 +253,15 @@ mount_erofs_payload() {
     esac
 }
 
-ROOTFS_SRC="$(resolve_payload_source rootfs "{{ROOTFS_PATH}}")"
+ROOTFS_SRC="$(resolve_payload_source {{ROLE_ROOTFS}} "{{ROOTFS_PATH}}")"
 if [ -z "$ROOTFS_SRC" ]; then
-    emergency_shell "Rootfs payload not found (missing partition role rootfs or file {{ROOTFS_PATH}})"
+    emergency_shell "{{ROOTFS_MISSING_MESSAGE}} (missing partition role {{ROLE_ROOTFS}} or file {{ROOTFS_PATH}})"
 fi
 msg "Mounting rootfs payload: $ROOTFS_SRC"
 mount_erofs_payload "$ROOTFS_SRC" /rootfs "rootfs"
 
 LIVE_OVERLAY=""
-OVERLAY_SRC="$(resolve_payload_source overlay "{{LIVE_OVERLAY_IMAGE_PATH}}")"
+OVERLAY_SRC="$(resolve_payload_source {{ROLE_OVERLAY}} "{{LIVE_OVERLAY_IMAGE_PATH}}")"
 if [ -n "$OVERLAY_SRC" ]; then
     msg "Mounting live overlay payload: $OVERLAY_SRC"
     mount_erofs_payload "$OVERLAY_SRC" /live-overlay "live overlay"
@@ -272,13 +269,6 @@ if [ -n "$OVERLAY_SRC" ]; then
     LIVE_OVERLAY="/live-overlay"
 else
     msg "No live overlay payload found (continuing without live overlay)"
-fi
-
-# Expose payload path for recstrap auto-discovery in live environment.
-busybox mkdir -p /newroot/run
-busybox ln -sf "$ROOTFS_SRC" /newroot/run/live-rootfs.erofs
-if [ -n "$OVERLAY_SRC" ]; then
-    busybox ln -sf "$OVERLAY_SRC" /newroot/run/live-overlay.erofs
 fi
 
 # Create overlay filesystem with THREE layers:
@@ -305,7 +295,7 @@ if [ -n "$LIVE_OVERLAY" ]; then
         emergency_shell "Failed to create overlay. Is CONFIG_OVERLAY_FS=y in kernel?"
     fi
     # Create marker file so systemd/OpenRC services can detect live boot
-    busybox touch "$NEWROOT/live-boot-marker"
+    busybox touch "$NEWROOT{{BOOT_MARKER}}"
 else
     # TWO-LAYER OVERLAY (shouldn't happen from ISO, but handle gracefully)
     msg "Using two-layer overlay (no live configs)"
@@ -314,7 +304,7 @@ else
         "$NEWROOT"; then
         emergency_shell "Failed to create overlay. Is CONFIG_OVERLAY_FS=y in kernel?"
     fi
-    busybox touch "$NEWROOT/live-boot-marker"
+    busybox touch "$NEWROOT{{BOOT_MARKER}}"
 fi
 
 # Runtime tmpfs mounts expected by OpenRC/system services in live mode.
@@ -322,16 +312,30 @@ busybox mkdir -p "$NEWROOT/run" "$NEWROOT/tmp"
 busybox mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs "$NEWROOT/run" 2>/dev/null || true
 busybox mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs "$NEWROOT/tmp" 2>/dev/null || true
 
+# Stable payload handles for installers, created on the live /run so no later
+# mount hides them. File payloads point where the boot medium ends up
+# ({{LIVE_MEDIA_DIR}}, moved below); partitions keep their /dev path.
+live_path() {
+    case "$1" in
+        /mnt/*) busybox echo "{{LIVE_MEDIA_DIR}}${1#/mnt}" ;;
+        *) busybox echo "$1" ;;
+    esac
+}
+busybox ln -sf "$(live_path "$ROOTFS_SRC")" "$NEWROOT{{ROOTFS_HANDLE}}"
+if [ -n "$OVERLAY_SRC" ]; then
+    busybox ln -sf "$(live_path "$OVERLAY_SRC")" "$NEWROOT{{OVERLAY_HANDLE}}"
+fi
+
 # Import optional host-provided boot injection payload.
 # Preferred channel:
-#   -fw_cfg name=opt/levitate/boot-injection,file=<payload.env>
+#   -fw_cfg name={{BOOT_INJECTION_FW_CFG}},file=<payload.env>
 # Fallback channel:
-#   additional read-only ISO containing /boot-injection.env.
+#   additional read-only ISO containing /{{BOOT_INJECTION_FILE}}.
 # NOTE: this must run before moving /dev into $NEWROOT, otherwise /dev/sr*
 # nodes are no longer visible from the initramfs namespace.
 busybox mkdir -p "$NEWROOT/run/boot-injection"
 BOOT_INJECTION_PAYLOAD="$NEWROOT/run/boot-injection/payload.env"
-BOOT_INJECTION_RAW="/sys/firmware/qemu_fw_cfg/by_name/opt/levitate/boot-injection/raw"
+BOOT_INJECTION_RAW="/sys/firmware/qemu_fw_cfg/by_name/{{BOOT_INJECTION_FW_CFG}}/raw"
 BOOT_INJECTION_IMPORTED=""
 
 if [ -r "$BOOT_INJECTION_RAW" ]; then
@@ -348,11 +352,11 @@ fi
 if [ -z "$BOOT_INJECTION_IMPORTED" ]; then
     BOOT_INJECTION_MEDIA_DIR="/boot-injection-media"
     busybox mkdir -p "$BOOT_INJECTION_MEDIA_DIR"
-    for dev in /dev/sr1 /dev/sr2 /dev/sdb /dev/vdb; do
+    for dev in {{BOOT_INJECTION_DEVICES}}; do
         [ -b "$dev" ] || continue
         if busybox mount -t iso9660 -o ro "$dev" "$BOOT_INJECTION_MEDIA_DIR" 2>/dev/null; then
-            if [ -r "$BOOT_INJECTION_MEDIA_DIR/boot-injection.env" ]; then
-                if busybox cat "$BOOT_INJECTION_MEDIA_DIR/boot-injection.env" > "$BOOT_INJECTION_PAYLOAD"; then
+            if [ -r "$BOOT_INJECTION_MEDIA_DIR/{{BOOT_INJECTION_FILE}}" ]; then
+                if busybox cat "$BOOT_INJECTION_MEDIA_DIR/{{BOOT_INJECTION_FILE}}" > "$BOOT_INJECTION_PAYLOAD"; then
                     busybox chmod 0600 "$BOOT_INJECTION_PAYLOAD" 2>/dev/null || true
                     busybox echo "iso9660:$dev" > "$NEWROOT/run/boot-injection/source"
                     msg "Imported boot injection payload from injection ISO ($dev)"
@@ -395,13 +399,11 @@ busybox mount --move /dev "$NEWROOT/dev"
 busybox mount --move /proc "$NEWROOT/proc"
 busybox mount --move /sys "$NEWROOT/sys"
 
-# NOTE: efivarfs mount moved to systemd unit (EFIVARS component)
-# See: leviso/src/component/definitions.rs - EFIVARS component
-# See: .teams/TEAM_114_efivarfs-mount-investigation.md
+# efivarfs is mounted by the live system itself, not here.
 
-# Keep ISO mounted at /run/live-media for installer boot assets.
-busybox mkdir -p "$NEWROOT/run/live-media"
-busybox mount --move /mnt "$NEWROOT/run/live-media"
+# Keep the boot medium mounted at {{LIVE_MEDIA_DIR}} for installer boot assets.
+busybox mkdir -p "$NEWROOT{{LIVE_MEDIA_DIR}}"
+busybox mount --move /mnt "$NEWROOT{{LIVE_MEDIA_DIR}}"
 
 # Verify init exists
 if [ ! -x "$NEWROOT/sbin/init" ] && [ ! -L "$NEWROOT/sbin/init" ]; then
@@ -419,3 +421,5 @@ exec busybox switch_root "$NEWROOT" /sbin/init
 
 # If we get here, something went very wrong
 emergency_shell "switch_root failed"
+
+# product-artifact-tag: {{PRODUCT_TAG}}

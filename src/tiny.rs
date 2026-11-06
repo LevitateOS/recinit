@@ -26,8 +26,8 @@ pub struct TinyConfig {
     /// Path to busybox static binary
     pub busybox_path: PathBuf,
 
-    /// Path to init script template
-    pub template_path: PathBuf,
+    /// Init script template; `None` uses the template built into recinit.
+    pub template_path: Option<PathBuf>,
 
     /// Output path for the initramfs (e.g., initramfs.cpio.gz)
     pub output: PathBuf,
@@ -59,9 +59,9 @@ pub struct TinyConfig {
     /// Whether to check for built-in modules
     pub check_builtin: bool,
 
-    /// Extra template variables for custom init scripts.
-    /// Each pair is (placeholder, value) where placeholder is WITHOUT braces
-    /// (e.g., "ROOT_PARTUUID" will replace `{{ROOT_PARTUUID}}`).
+    /// Template values set by the caller: `BOOT_BANNER` and `PRODUCT_TAG`
+    /// override their defaults; any other key must name a placeholder that
+    /// only a custom template uses. Keys are given without braces.
     pub extra_template_vars: Vec<(String, String)>,
 }
 
@@ -70,10 +70,10 @@ impl Default for TinyConfig {
         Self {
             modules_dir: PathBuf::from("/usr/lib/modules"),
             busybox_path: PathBuf::from("/usr/bin/busybox"),
-            template_path: PathBuf::from("templates/init_tiny.template"),
+            template_path: None,
             output: PathBuf::from("initramfs.cpio.gz"),
             iso_label: "LINUX".to_string(),
-            rootfs_path: "live/filesystem.erofs".to_string(),
+            rootfs_path: distro_spec::shared::ROOTFS_ISO_PATH.to_string(),
             live_overlay_image_path: Some(distro_spec::shared::LIVE_OVERLAYFS_ISO_PATH.to_string()),
             live_overlay_path: Some(distro_spec::shared::LIVE_OVERLAYFS_ISO_PATH.to_string()),
             boot_devices: default_boot_devices(),
@@ -231,28 +231,34 @@ fn copy_boot_modules(config: &TinyConfig, initramfs_root: &Path, verbose: bool) 
     Ok(())
 }
 
-/// Create init script from template.
+/// The live init template shipped with recinit.
+pub const DEFAULT_TEMPLATE: &str = include_str!("../templates/init_tiny.template");
+
+/// Placeholders a caller may override, with their defaults.
+const OVERRIDABLE: &[(&str, &str)] = &[
+    ("BOOT_BANNER", "initramfs starting..."),
+    ("PRODUCT_TAG", "untagged"),
+];
+
+/// Create init script from template. Every placeholder must be filled, and
+/// every value set must be used, so template and filler cannot drift apart.
 fn create_init_script(config: &TinyConfig, initramfs_root: &Path, verbose: bool) -> Result<()> {
     if verbose {
         println!("Creating init script from template...");
     }
 
-    let template = fs::read_to_string(&config.template_path).with_context(|| {
-        format!(
-            "Failed to read init template at {}",
-            config.template_path.display()
-        )
-    })?;
+    let template = match &config.template_path {
+        Some(path) => fs::read_to_string(path)
+            .with_context(|| format!("Failed to read init template at {}", path.display()))?,
+        None => DEFAULT_TEMPLATE.to_string(),
+    };
 
-    // Get module names from paths
     let module_names: Vec<&str> = config
         .module_preset
         .module_paths()
         .iter()
         .map(|m| module_name(m))
         .collect();
-
-    // Build the init script from template
     let overlay_image_path = config
         .live_overlay_image_path
         .as_ref()
@@ -260,16 +266,43 @@ fn create_init_script(config: &TinyConfig, initramfs_root: &Path, verbose: bool)
         .map(|p| format!("/{}", p))
         .unwrap_or_default();
 
-    let mut init_content = template
-        .replace("{{ISO_LABEL}}", &config.iso_label)
-        .replace("{{ROOTFS_PATH}}", &format!("/{}", config.rootfs_path))
-        .replace("{{BOOT_MODULES}}", &module_names.join(" "))
-        .replace("{{BOOT_DEVICES}}", &config.boot_devices.join(" "))
-        .replace("{{LIVE_OVERLAY_IMAGE_PATH}}", &overlay_image_path);
-
-    // Apply extra template variables
+    let mut fixed: Vec<(String, String)> = distro_spec::shared::live_boot::init_template_vars()
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+    fixed.extend([
+        ("ISO_LABEL".to_string(), config.iso_label.clone()),
+        ("ROOTFS_PATH".to_string(), format!("/{}", config.rootfs_path)),
+        ("BOOT_MODULES".to_string(), module_names.join(" ")),
+        ("BOOT_DEVICES".to_string(), config.boot_devices.join(" ")),
+        ("LIVE_OVERLAY_IMAGE_PATH".to_string(), overlay_image_path),
+    ]);
+    let mut vars = fixed.clone();
+    vars.extend(OVERRIDABLE.iter().map(|(k, v)| (k.to_string(), v.to_string())));
     for (key, value) in &config.extra_template_vars {
-        init_content = init_content.replace(&format!("{{{{{}}}}}", key), value);
+        if fixed.iter().any(|(k, _)| k == key) {
+            bail!("template value {key} is set by recinit and cannot be overridden");
+        }
+        if !template.contains(&format!("{{{{{key}}}}}")) {
+            bail!("template value {key} is not used by the init template");
+        }
+        vars.retain(|(k, _)| k != key);
+        vars.push((key.clone(), value.clone()));
+    }
+
+    let mut init_content = template;
+    for (key, value) in &vars {
+        init_content = init_content.replace(&format!("{{{{{key}}}}}"), value);
+    }
+    let unfilled: Vec<&str> = init_content
+        .match_indices("{{")
+        .filter_map(|(i, _)| {
+            let rest = &init_content[i + 2..];
+            rest.find("}}").map(|end| &rest[..end])
+        })
+        .collect();
+    if !unfilled.is_empty() {
+        bail!("init template has unfilled placeholders: {}", unfilled.join(", "));
     }
 
     let init_dst = initramfs_root.join("init");
