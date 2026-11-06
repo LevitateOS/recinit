@@ -7,7 +7,8 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 use recinit::{
-    InitramfsBuilder, InstallConfig, ModulePreset, TinyConfig, INSTALL_MODULES, LIVE_MODULES,
+    build_install_initramfs, build_tiny_initramfs, default_boot_devices, InstallConfig,
+    ModulePreset, TinyConfig, DEFAULT_GZIP_LEVEL, INSTALL_MODULES, LIVE_MODULES,
 };
 
 #[derive(Parser)]
@@ -60,7 +61,7 @@ enum Commands {
         template_vars: Vec<(String, String)>,
 
         /// Gzip compression level (1-9)
-        #[arg(long, default_value = "9")]
+        #[arg(long, default_value_t = DEFAULT_GZIP_LEVEL)]
         gzip_level: u32,
 
         /// Skip checking for built-in modules
@@ -87,7 +88,7 @@ enum Commands {
         modules: String,
 
         /// Gzip compression level (1-9)
-        #[arg(long, default_value = "9")]
+        #[arg(long, default_value_t = DEFAULT_GZIP_LEVEL)]
         gzip_level: u32,
 
         /// Skip firmware copying
@@ -129,17 +130,16 @@ fn main() -> Result<()> {
                 busybox_path: busybox,
                 template_path: template,
                 output,
+                boot_devices: default_boot_devices(),
+                module_preset: ModulePreset::Live,
                 iso_label,
                 rootfs_path,
                 live_overlay_image_path: Some(live_overlay_image_path),
                 extra_template_vars: template_vars,
                 gzip_level,
                 check_builtin: !no_builtin_check,
-                ..Default::default()
             };
-
-            let builder = InitramfsBuilder::new().verbose(verbose);
-            builder.build_tiny(config)?;
+            build_tiny_initramfs(&config, verbose)?;
         }
 
         Commands::BuildInstall {
@@ -161,8 +161,7 @@ fn main() -> Result<()> {
                 include_firmware: !no_firmware,
             };
 
-            let builder = InitramfsBuilder::new().verbose(verbose);
-            builder.build_install(config)?;
+            build_install_initramfs(&config, verbose)?;
         }
 
         Commands::Modules {
@@ -214,12 +213,9 @@ fn parse_module_preset(s: &str) -> Result<ModulePreset> {
     }
 
     // Otherwise, treat as comma-separated custom list
-    let modules: Vec<String> = s.split(',').map(|s| s.trim().to_string()).collect();
-    if modules.is_empty() {
-        bail!("No modules specified");
-    }
-
-    Ok(ModulePreset::Custom(modules))
+    Ok(ModulePreset::Custom(
+        s.split(',').map(|s| s.trim().to_string()).collect(),
+    ))
 }
 
 fn parse_key_value(arg: &str) -> std::result::Result<(String, String), String> {

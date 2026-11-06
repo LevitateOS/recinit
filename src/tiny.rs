@@ -13,9 +13,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use crate::busybox::setup_busybox;
-use crate::cpio::build_cpio;
+use crate::cpio::build_archive;
 use crate::modules::{copy_kernel_modules, module_name, ModulePreset};
-use crate::DEFAULT_GZIP_LEVEL;
 
 /// Configuration for building a tiny/live initramfs.
 #[derive(Debug, Clone)]
@@ -41,12 +40,6 @@ pub struct TinyConfig {
     /// Path to live overlay payload image inside ISO (e.g., "live/overlayfs.erofs")
     pub live_overlay_image_path: Option<String>,
 
-    /// Legacy alias for live overlay payload image path.
-    ///
-    /// Kept for compatibility with existing callers that still initialize
-    /// `TinyConfig` using `live_overlay_path`.
-    pub live_overlay_path: Option<String>,
-
     /// Boot devices to probe in order
     pub boot_devices: Vec<String>,
 
@@ -63,26 +56,6 @@ pub struct TinyConfig {
     /// override their defaults; any other key must name a placeholder that
     /// only a custom template uses. Keys are given without braces.
     pub extra_template_vars: Vec<(String, String)>,
-}
-
-impl Default for TinyConfig {
-    fn default() -> Self {
-        Self {
-            modules_dir: PathBuf::from("/usr/lib/modules"),
-            busybox_path: PathBuf::from("/usr/bin/busybox"),
-            template_path: None,
-            output: PathBuf::from("initramfs.cpio.gz"),
-            iso_label: "LINUX".to_string(),
-            rootfs_path: distro_spec::shared::ROOTFS_ISO_PATH.to_string(),
-            live_overlay_image_path: Some(distro_spec::shared::LIVE_OVERLAYFS_ISO_PATH.to_string()),
-            live_overlay_path: Some(distro_spec::shared::LIVE_OVERLAYFS_ISO_PATH.to_string()),
-            boot_devices: default_boot_devices(),
-            module_preset: ModulePreset::Live,
-            gzip_level: DEFAULT_GZIP_LEVEL,
-            check_builtin: true,
-            extra_template_vars: Vec::new(),
-        }
-    }
 }
 
 /// Default boot device probe order.
@@ -116,51 +89,15 @@ pub fn build_tiny_initramfs(config: &TinyConfig, verbose: bool) -> Result<()> {
         println!("=== Building Tiny Initramfs ===\n");
     }
 
-    // Create temporary build directory
-    let output_dir = config.output.parent().unwrap_or(Path::new("."));
-    let initramfs_root = output_dir.join("initramfs-build-root");
-
-    // Clean previous build
-    if initramfs_root.exists() {
-        fs::remove_dir_all(&initramfs_root)?;
-    }
-
-    // 1. Create directory structure
-    create_directory_structure(&initramfs_root, verbose)?;
-
-    // 2. Set up busybox
-    if verbose {
-        println!("Setting up busybox...");
-    }
-    setup_busybox(&config.busybox_path, &initramfs_root, None)?;
-    if verbose {
-        println!("  Busybox ready");
-    }
-
-    // 3. Copy kernel modules
-    copy_boot_modules(config, &initramfs_root, verbose)?;
-
-    // 4. Create init script from template
-    create_init_script(config, &initramfs_root, verbose)?;
-
-    // 5. Build CPIO archive to temporary file
-    if verbose {
-        println!("Building cpio archive...");
-    }
-    let temp_cpio = output_dir.join(format!(
-        "{}.tmp",
-        config.output.file_name().unwrap().to_string_lossy()
-    ));
-    build_cpio(&initramfs_root, &temp_cpio, config.gzip_level)?;
-
-    // 6. Verify and rename to final destination
-    if !temp_cpio.exists() || fs::metadata(&temp_cpio)?.len() < 1024 {
-        bail!("Initramfs build produced invalid or empty file");
-    }
-    fs::rename(&temp_cpio, &config.output)?;
-
-    // 7. Clean up build directory
-    fs::remove_dir_all(&initramfs_root)?;
+    build_archive(&config.output, config.gzip_level, |root| {
+        create_directory_structure(root, verbose)?;
+        if verbose {
+            println!("Setting up busybox...");
+        }
+        setup_busybox(&config.busybox_path, root, None)?;
+        copy_boot_modules(config, root, verbose)?;
+        create_init_script(config, root, verbose)
+    })?;
 
     if verbose {
         let size = fs::metadata(&config.output)?.len();
@@ -181,13 +118,6 @@ fn create_directory_structure(root: &Path, verbose: bool) -> Result<()> {
     for dir in INITRAMFS_DIRS {
         fs::create_dir_all(root.join(dir))?;
     }
-
-    // Create a note in /dev explaining devtmpfs
-    let dev = root.join("dev");
-    fs::write(
-        dev.join(".note"),
-        "# Device nodes are created by devtmpfs mount in /init\n",
-    )?;
 
     Ok(())
 }
@@ -262,7 +192,6 @@ fn create_init_script(config: &TinyConfig, initramfs_root: &Path, verbose: bool)
     let overlay_image_path = config
         .live_overlay_image_path
         .as_ref()
-        .or(config.live_overlay_path.as_ref())
         .map(|p| format!("/{}", p))
         .unwrap_or_default();
 

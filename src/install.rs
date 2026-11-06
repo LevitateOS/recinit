@@ -12,10 +12,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::busybox::{download_and_cache_busybox, setup_busybox};
-use crate::cpio::build_cpio;
+use crate::cpio::build_archive;
 use crate::modules::{copy_kernel_modules, ModulePreset};
 use crate::systemd::{copy_firmware, copy_initrd_units, copy_systemd};
-use crate::DEFAULT_GZIP_LEVEL;
 
 /// Configuration for building an install initramfs.
 #[derive(Debug, Clone)]
@@ -38,19 +37,6 @@ pub struct InstallConfig {
 
     /// Whether to include firmware
     pub include_firmware: bool,
-}
-
-impl Default for InstallConfig {
-    fn default() -> Self {
-        Self {
-            rootfs: PathBuf::from("rootfs-staging"),
-            modules_path: None,
-            output: PathBuf::from("initramfs-installed.img"),
-            module_preset: ModulePreset::Install,
-            gzip_level: DEFAULT_GZIP_LEVEL,
-            include_firmware: true,
-        }
-    }
 }
 
 /// Directories for install initramfs.
@@ -113,110 +99,78 @@ pub fn build_install_initramfs(config: &InstallConfig, verbose: bool) -> Result<
         println!("  Kernel version: {}", kernel_version);
     }
 
-    // Create temporary build directory
-    let output_dir = config.output.parent().unwrap_or(Path::new("."));
-    let initramfs_root = output_dir.join("initramfs-install-root");
+    build_archive(&config.output, config.gzip_level, |root| {
+        // 1. Create directory structure
+        create_install_directory_structure(root, verbose)?;
 
-    // Clean previous build
-    if initramfs_root.exists() {
-        fs::remove_dir_all(&initramfs_root)?;
-    }
+        // 2. Copy kernel modules (from modules_path if specified, otherwise rootfs)
+        let modules_source = config.modules_path.as_ref().unwrap_or(&config.rootfs);
+        copy_install_modules(
+            modules_source,
+            root,
+            &kernel_version,
+            config,
+            verbose,
+        )?;
 
-    // 1. Create directory structure
-    create_install_directory_structure(&initramfs_root, verbose)?;
+        // 3. Copy firmware (optional)
+        if config.include_firmware {
+            copy_firmware(&config.rootfs, root, verbose)?;
+        }
 
-    // 2. Copy kernel modules (from modules_path if specified, otherwise rootfs)
-    let modules_source = config.modules_path.as_ref().unwrap_or(&config.rootfs);
-    copy_install_modules(
-        modules_source,
-        &initramfs_root,
-        &kernel_version,
-        config,
-        verbose,
-    )?;
+        // 4. Copy systemd and dependencies
+        copy_systemd(&config.rootfs, root, verbose)?;
 
-    // 3. Copy firmware (optional)
-    if config.include_firmware {
-        copy_firmware(&config.rootfs, &initramfs_root, verbose)?;
-    }
+        // 4b. Set up busybox for emergency shell
+        let cache_dir = config.output.parent().unwrap_or(Path::new("."));
+        let busybox_path = download_and_cache_busybox(cache_dir)?;
+        setup_busybox(&busybox_path, root, None)?;
 
-    // 4. Copy systemd and dependencies
-    copy_systemd(&config.rootfs, &initramfs_root, verbose)?;
+        // 5. Create init symlink to systemd
+        let init_path = root.join("init");
+        if !init_path.exists() {
+            std::os::unix::fs::symlink("/usr/lib/systemd/systemd", &init_path)?;
+        }
 
-    // 4b. Set up busybox for emergency shell
-    let cache_dir = config.output.parent().unwrap_or(Path::new("."));
-    let busybox_path = download_and_cache_busybox(cache_dir)?;
-    setup_busybox(&busybox_path, &initramfs_root, None)?;
+        // 5b. Create /etc/initrd-release (required for systemd to recognize initrd)
+        // Without this, initrd-root-device.target assertion fails
+        let etc_dir = root.join("etc");
+        fs::create_dir_all(&etc_dir)?;
+        fs::write(
+            etc_dir.join("initrd-release"),
+            "NAME=\"LevitateOS initramfs\"\nVERSION=\"1.0\"\nID=levitateos\n",
+        )?;
 
-    // 5. Create init symlink to systemd
-    let init_path = initramfs_root.join("init");
-    if !init_path.exists() {
-        std::os::unix::fs::symlink("/usr/lib/systemd/systemd", &init_path)?;
-    }
+        // 5c. Create minimal /etc/passwd and /etc/group (required by systemd/udev)
+        // Without these, systemd-udevd and other services may fail to start or
+        // run with incorrect permissions, causing /dev/disk/by-uuid to not be created
+        fs::write(
+            etc_dir.join("passwd"),
+            "root:x:0:0:root:/root:/bin/sh\nnobody:x:65534:65534:Nobody:/:/sbin/nologin\n",
+        )?;
+        fs::write(
+            etc_dir.join("group"),
+            "root:x:0:\ntty:x:5:\ndisk:x:6:\nwheel:x:10:\nnobody:x:65534:\n",
+        )?;
+        fs::write(etc_dir.join("shadow"), "root:*:19000:0:99999:7:::\n")?;
 
-    // 5b. Create /etc/initrd-release (required for systemd to recognize initrd)
-    // Without this, initrd-root-device.target assertion fails
-    let etc_dir = initramfs_root.join("etc");
-    fs::create_dir_all(&etc_dir)?;
-    fs::write(
-        etc_dir.join("initrd-release"),
-        "NAME=\"LevitateOS initramfs\"\nVERSION=\"1.0\"\nID=levitateos\n",
-    )?;
+        // 5d. Create /etc/nsswitch.conf (required for glibc user/group lookups)
+        // Without this, getpwnam/getgrnam may fail, causing udev rules to break
+        fs::write(
+            etc_dir.join("nsswitch.conf"),
+            "passwd:     files\ngroup:      files\nshadow:     files\nhosts:      files dns\n",
+        )?;
 
-    // 5c. Create minimal /etc/passwd and /etc/group (required by systemd/udev)
-    // Without these, systemd-udevd and other services may fail to start or
-    // run with incorrect permissions, causing /dev/disk/by-uuid to not be created
-    fs::write(
-        etc_dir.join("passwd"),
-        "root:x:0:0:root:/root:/bin/sh\nnobody:x:65534:65534:Nobody:/:/sbin/nologin\n",
-    )?;
-    fs::write(
-        etc_dir.join("group"),
-        "root:x:0:\ntty:x:5:\ndisk:x:6:\nwheel:x:10:\nnobody:x:65534:\n",
-    )?;
-    fs::write(etc_dir.join("shadow"), "root:*:19000:0:99999:7:::\n")?;
-
-    // 5d. Create /etc/nsswitch.conf (required for glibc user/group lookups)
-    // Without this, getpwnam/getgrnam may fail, causing udev rules to break
-    fs::write(
-        etc_dir.join("nsswitch.conf"),
-        "passwd:     files\ngroup:      files\nshadow:     files\nhosts:      files dns\n",
-    )?;
-
-    // 6. Copy initrd systemd units
-    copy_initrd_units(&config.rootfs, &initramfs_root, verbose)?;
-
-    // 7. Build CPIO archive
-    if verbose {
-        println!("Building cpio archive...");
-    }
-    let temp_cpio = output_dir.join(format!(
-        "{}.tmp",
-        config.output.file_name().unwrap().to_string_lossy()
-    ));
-    build_cpio(&initramfs_root, &temp_cpio, config.gzip_level)?;
-
-    // 8. Verify the artifact
-    if !temp_cpio.exists() || fs::metadata(&temp_cpio)?.len() < 1024 {
-        bail!("Install initramfs build produced invalid or empty file");
-    }
-
-    // 9. Atomic rename
-    fs::rename(&temp_cpio, &config.output)?;
-
-    // 10. Clean up
-    fs::remove_dir_all(&initramfs_root)?;
+        // 6. Copy initrd systemd units
+        copy_initrd_units(&config.rootfs, root, verbose)?;
+        Ok(())
+    })?;
 
     if verbose {
         let size = fs::metadata(&config.output)?.len();
         println!("\n=== Install Initramfs Complete ===");
         println!("  Output: {}", config.output.display());
         println!("  Size: {} MB", size / 1024 / 1024);
-
-        // Sanity check
-        if size < 5 * 1024 * 1024 {
-            println!("  [WARN] Initramfs seems small - may be missing modules or systemd");
-        }
     }
 
     Ok(())

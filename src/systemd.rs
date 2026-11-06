@@ -8,7 +8,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use crate::elf::{copy_library_to, get_all_dependencies};
+use leviso_elf::{copy_library_to, get_all_dependencies};
 
 /// Essential systemd binaries needed for initrd boot.
 pub const SYSTEMD_FILES: &[&str] = &[
@@ -198,7 +198,7 @@ pub fn copy_initrd_units(
     let udev_rules_src = rootfs_staging.join("usr/lib/udev/rules.d");
     let udev_rules_dst = initramfs_root.join("usr/lib/udev/rules.d");
     if udev_rules_src.exists() {
-        crate::elf::copy_dir_recursive(&udev_rules_src, &udev_rules_dst)?;
+        leviso_elf::copy_dir_recursive(&udev_rules_src, &udev_rules_dst)?;
     }
 
     // Copy udev helper programs (needed by udev rules for device identification)
@@ -481,7 +481,7 @@ pub fn copy_firmware(rootfs_staging: &Path, initramfs_root: &Path, verbose: bool
     let dst = initramfs_root.join("usr/lib/firmware");
 
     if src.exists() {
-        let size = crate::elf::copy_dir_recursive(&src, &dst)?;
+        let size = leviso_elf::copy_dir_recursive(&src, &dst)?;
         if verbose {
             println!("  Copied firmware ({:.1} MB)", size as f64 / 1_000_000.0);
         }

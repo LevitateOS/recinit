@@ -15,30 +15,40 @@ use walkdir::WalkDir;
 /// CPIO newc format header size (110 bytes + filename + padding)
 const CPIO_HEADER_MAGIC: &str = "070701";
 
-/// Build a compressed cpio archive from a directory.
-///
-/// Creates a gzip-compressed cpio archive in newc format, suitable for
-/// use as a Linux initramfs.
-///
-/// # Arguments
-///
-/// * `root` - Directory containing the initramfs contents
-/// * `output` - Path for the output .cpio.gz file
-/// * `gzip_level` - Gzip compression level (1-9, higher = smaller but slower)
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use recinit::build_cpio;
-/// use std::path::Path;
-///
-/// build_cpio(
-///     Path::new("/tmp/initramfs-root"),
-///     Path::new("/tmp/initramfs.cpio.gz"),
-///     6,
-/// )?;
-/// ```
-pub fn build_cpio(root: &Path, output: &Path, gzip_level: u32) -> Result<()> {
+/// Build an initramfs at `output`: `fill` populates a private scratch tree
+/// (removed whatever happens), which is archived to a temporary file next to
+/// `output` and renamed into place only once it is complete.
+pub(crate) fn build_archive(
+    output: &Path,
+    gzip_level: u32,
+    fill: impl FnOnce(&Path) -> Result<()>,
+) -> Result<()> {
+    let dir = output
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let scratch = tempfile::Builder::new()
+        .prefix(".initramfs-root-")
+        .tempdir_in(dir)
+        .with_context(|| format!("creating scratch tree in {}", dir.display()))?;
+    fill(scratch.path())?;
+    let archive = tempfile::Builder::new()
+        .prefix(".initramfs-")
+        .tempfile_in(dir)?;
+    build_cpio(scratch.path(), archive.path(), gzip_level)?;
+    if fs::metadata(archive.path())?.len() < 1024 {
+        anyhow::bail!("initramfs build produced an empty archive");
+    }
+    // A temporary file is private; the initramfs is an ordinary readable file.
+    fs::set_permissions(archive.path(), fs::Permissions::from_mode(0o644))?;
+    archive
+        .persist(output)
+        .with_context(|| format!("writing {}", output.display()))?;
+    Ok(())
+}
+
+/// Write `root` as a gzip-compressed newc cpio archive.
+fn build_cpio(root: &Path, output: &Path, gzip_level: u32) -> Result<()> {
     let file =
         File::create(output).with_context(|| format!("Failed to create {}", output.display()))?;
     let encoder = GzEncoder::new(file, Compression::new(gzip_level));
