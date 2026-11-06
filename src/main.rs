@@ -44,8 +44,9 @@ enum Commands {
         #[arg(short, long, default_value = "initramfs.cpio.gz")]
         output: PathBuf,
 
-        /// ISO volume label for boot device detection
-        #[arg(long, default_value = "LINUX")]
+        /// ISO volume label the init looks for to find the boot media
+        /// (the variant's `identity.iso_label`)
+        #[arg(long)]
         iso_label: String,
 
         /// Path to rootfs inside ISO
