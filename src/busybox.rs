@@ -13,6 +13,8 @@ use std::process::Command;
 /// applet. Existing files win, so tools copied in earlier (util-linux
 /// `mount`, a real `sh`) are not shadowed.
 pub fn setup_busybox(busybox_src: &Path, initramfs_root: &Path) -> Result<()> {
+    // A bare name would otherwise be looked up on PATH, not taken as a file.
+    let busybox_src = &std::path::absolute(busybox_src)?;
     let output = Command::new(busybox_src)
         .arg("--list")
         .output()
