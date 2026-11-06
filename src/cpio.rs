@@ -29,13 +29,13 @@ pub(crate) fn build_archive(
         .tempdir_in(dir)
         .with_context(|| format!("creating scratch tree in {}", dir.display()))?;
     fill(scratch.path())?;
+    if fs::read_dir(scratch.path())?.next().is_none() {
+        anyhow::bail!("initramfs build put nothing into the archive");
+    }
     let archive = tempfile::Builder::new()
         .prefix(".initramfs-")
         .tempfile_in(dir)?;
     build_cpio(scratch.path(), archive.path(), gzip_level)?;
-    if fs::metadata(archive.path())?.len() < 1024 {
-        anyhow::bail!("initramfs build produced an empty archive");
-    }
     // A temporary file is private; the initramfs is an ordinary readable file.
     fs::set_permissions(archive.path(), fs::Permissions::from_mode(0o644))?;
     archive
@@ -109,20 +109,7 @@ impl<W: Write> CpioWriter<W> {
         let ino = self.next_ino;
         self.next_ino += 1;
         let nlink = if file_type.is_dir() { 2 } else { 1 };
-        self.write_header(
-            ino,
-            mode,
-            0, // uid
-            0, // gid
-            nlink,
-            0, // mtime
-            filesize,
-            0, // dev major
-            0, // dev minor
-            0, // rdev major
-            0, // rdev minor
-            name,
-        )?;
+        self.write_header(ino, mode, nlink, filesize, name)?;
 
         if file_type.is_symlink() {
             let target = fs::read_link(path)?;
@@ -138,20 +125,13 @@ impl<W: Write> CpioWriter<W> {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// A newc header; uid, gid, mtime and device numbers are always 0.
     fn write_header(
         &mut self,
         ino: u32,
         mode: u32,
-        uid: u32,
-        gid: u32,
         nlink: u32,
-        mtime: u32,
         filesize: u32,
-        dev_major: u32,
-        dev_minor: u32,
-        rdev_major: u32,
-        rdev_minor: u32,
         name: &str,
     ) -> Result<()> {
         let name_bytes = name.as_bytes();
@@ -163,15 +143,15 @@ impl<W: Write> CpioWriter<W> {
             CPIO_HEADER_MAGIC,
             ino,
             mode,
-            uid,
-            gid,
+            0, // uid
+            0, // gid
             nlink,
-            mtime,
+            0, // mtime
             filesize,
-            dev_major,
-            dev_minor,
-            rdev_major,
-            rdev_minor,
+            0, // dev major
+            0, // dev minor
+            0, // rdev major
+            0, // rdev minor
             namesize,
             0, // checksum (unused in newc)
         );
@@ -197,20 +177,7 @@ impl<W: Write> CpioWriter<W> {
 
     fn finish(mut self) -> Result<W> {
         // TRAILER!!! entry marks end of archive
-        self.write_header(
-            0, // ino
-            0, // mode
-            0, // uid
-            0, // gid
-            1, // nlink
-            0, // mtime
-            0, // filesize
-            0, // dev_major
-            0, // dev_minor
-            0, // rdev_major
-            0, // rdev_minor
-            "TRAILER!!!",
-        )?;
+        self.write_header(0, 0, 1, 0, "TRAILER!!!")?;
 
         Ok(self.writer)
     }

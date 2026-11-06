@@ -10,7 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub use distro_spec::shared::{INSTALL_MODULES, LIVE_MODULES, MODULE_METADATA_FILES};
+use distro_spec::shared::{INSTALL_MODULES, LIVE_MODULES, MODULE_METADATA_FILES};
 
 /// Which modules to put in an initramfs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,8 +33,8 @@ impl ModulePreset {
 
     pub fn parse_name(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
-            "live" | "tiny" => Some(Self::Live),
-            "install" | "full" => Some(Self::Install),
+            "live" => Some(Self::Live),
+            "install" => Some(Self::Install),
             _ => None,
         }
     }

@@ -51,10 +51,8 @@ pub fn build_install_initramfs(config: &InstallConfig, verbose: bool) -> Result<
     }
 
     build_archive(&config.output, config.gzip_level, |root| {
-        for dir in ["usr/bin", "usr/sbin", "usr/lib", "usr/lib64"] {
-            fs::create_dir_all(root.join(dir))?;
-        }
         for (link, target) in payload::USR_LINKS {
+            fs::create_dir_all(root.join(target))?;
             std::os::unix::fs::symlink(target, root.join(link))?;
         }
         for dir in MOUNT_DIRS {

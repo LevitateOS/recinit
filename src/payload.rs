@@ -181,12 +181,15 @@ pub const ETC_FILES: &[(&str, &str)] = &[
 pub const INITRD_RELEASE: &str = "etc/initrd-release";
 const OS_RELEASE: &str = "usr/lib/os-release";
 
-/// Library directories that are private to a package (RUNPATH-only); their
-/// libraries are also made visible in `usr/lib64`.
-const PRIVATE_LIB_DIRS: &[&str] = &["usr/lib64/systemd"];
+/// Where libraries go in the initramfs.
+const LIB_DIR: &str = "usr/lib64";
+
+/// Library directories under [`LIB_DIR`] that are private to a package
+/// (RUNPATH-only); their libraries are also made visible in [`LIB_DIR`].
+const PRIVATE_LIB_SUBDIRS: &[&str] = &["systemd"];
 
 /// The dynamic loaders, which no library list names.
-const LOADERS: &[&str] = &["usr/lib64/ld-linux-x86-64.so.2"];
+const LOADERS: &[&str] = &["usr/lib64/ld-linux-x86-64.so.2"]; // in LIB_DIR
 
 fn require(rootfs: &Path, rel: &str) -> Result<std::path::PathBuf> {
     let path = rootfs.join(rel);
@@ -207,11 +210,16 @@ fn copy_file(src: &Path, dst: &Path, mode: Option<u32>) -> Result<()> {
 
 /// Copy the whole declared payload from `rootfs` into `root`.
 pub fn install(rootfs: &Path, root: &Path) -> Result<()> {
+    let private_dirs: Vec<String> = PRIVATE_LIB_SUBDIRS
+        .iter()
+        .map(|sub| format!("{LIB_DIR}/{sub}"))
+        .collect();
+    let private_dirs: Vec<&str> = private_dirs.iter().map(String::as_str).collect();
     for exe in EXECUTABLES {
         let src = require(rootfs, exe)?;
         copy_file(&src, &root.join(exe), Some(0o755))?;
-        for lib in get_all_dependencies(rootfs, &src, PRIVATE_LIB_DIRS)? {
-            copy_library_to(rootfs, &lib, root, "usr/lib64", "usr/lib", PRIVATE_LIB_DIRS, &["systemd"])?;
+        for lib in get_all_dependencies(rootfs, &src, &private_dirs)? {
+            copy_library_to(rootfs, &lib, root, LIB_DIR, "usr/lib", &private_dirs, PRIVATE_LIB_SUBDIRS)?;
         }
     }
     for loader in LOADERS {
@@ -220,17 +228,17 @@ pub fn install(rootfs: &Path, root: &Path) -> Result<()> {
             copy_file(&require(rootfs, loader)?, &dst, None)?;
         }
     }
-    for dir in PRIVATE_LIB_DIRS {
-        let private = root.join(dir);
+    for sub in PRIVATE_LIB_SUBDIRS {
+        let private = root.join(LIB_DIR).join(sub);
         if !private.is_dir() {
             continue;
         }
-        let relative = Path::new(dir).strip_prefix("usr/lib64").unwrap_or(Path::new(dir));
         for entry in fs::read_dir(&private)? {
             let name = entry?.file_name();
-            let link = root.join("usr/lib64").join(&name);
+            let relative = Path::new(sub).join(&name);
+            let link = root.join(LIB_DIR).join(&name);
             if !link.exists() {
-                std::os::unix::fs::symlink(relative.join(&name), &link)?;
+                std::os::unix::fs::symlink(&relative, &link)?;
             }
         }
     }
@@ -270,10 +278,10 @@ pub fn install(rootfs: &Path, root: &Path) -> Result<()> {
 }
 
 /// Copy firmware (optional hardware support).
-pub fn copy_firmware(rootfs: &Path, root: &Path) -> Result<u64> {
+pub fn copy_firmware(rootfs: &Path, root: &Path) -> Result<()> {
     let src = rootfs.join("usr/lib/firmware");
-    if !src.exists() {
-        return Ok(0);
+    if src.exists() {
+        leviso_elf::copy_dir_recursive(&src, &root.join("usr/lib/firmware"))?;
     }
-    leviso_elf::copy_dir_recursive(&src, &root.join("usr/lib/firmware"))
+    Ok(())
 }

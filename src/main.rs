@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use recinit::{
     build_install_initramfs, build_tiny_initramfs, default_boot_devices, InstallConfig,
-    ModulePreset, TinyConfig, DEFAULT_GZIP_LEVEL, INSTALL_MODULES, LIVE_MODULES,
+    ModulePreset, TinyConfig, DEFAULT_GZIP_LEVEL,
 };
 
 #[derive(Parser)]
@@ -173,18 +173,18 @@ fn main() -> Result<()> {
                 println!("Available module presets:");
                 println!(
                     "  live    - Minimal modules for live ISO boot ({} modules)",
-                    LIVE_MODULES.len()
+                    ModulePreset::Live.names().len()
                 );
                 println!(
                     "  install - Full modules for installed systems ({} modules)",
-                    INSTALL_MODULES.len()
+                    ModulePreset::Install.names().len()
                 );
                 return Ok(());
             }
 
             let preset_name = preset.unwrap_or_else(|| "live".to_string());
             let modules = match ModulePreset::parse_name(&preset_name) {
-                Some(preset @ (ModulePreset::Live | ModulePreset::Install)) => preset.names(),
+                Some(preset) => preset.names(),
                 _ => bail!(
                     "Unknown preset: {}. Use --list-presets to see available options.",
                     preset_name
