@@ -66,7 +66,7 @@ pub fn default_boot_devices() -> Vec<String> {
 }
 
 /// Directories to create in initramfs root.
-const INITRAMFS_DIRS: &[&str] = &[
+pub const INITRAMFS_DIRS: &[&str] = &[
     "bin",
     "dev",
     "proc",
