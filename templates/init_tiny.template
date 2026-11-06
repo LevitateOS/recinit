@@ -309,15 +309,15 @@ fi
 #   additional read-only ISO containing /{{BOOT_INJECTION_FILE}}.
 # NOTE: this must run before moving /dev into $NEWROOT, otherwise /dev/sr*
 # nodes are no longer visible from the initramfs namespace.
-busybox mkdir -p "$NEWROOT/run/boot-injection"
-BOOT_INJECTION_PAYLOAD="$NEWROOT/run/boot-injection/payload.env"
+busybox mkdir -p "$NEWROOT{{BOOT_INJECTION_DIR}}"
+BOOT_INJECTION_PAYLOAD="$NEWROOT{{BOOT_INJECTION_ENV}}"
 BOOT_INJECTION_RAW="/sys/firmware/qemu_fw_cfg/by_name/{{BOOT_INJECTION_FW_CFG}}/raw"
 BOOT_INJECTION_IMPORTED=""
 
 if [ -r "$BOOT_INJECTION_RAW" ]; then
     if busybox cat "$BOOT_INJECTION_RAW" > "$BOOT_INJECTION_PAYLOAD"; then
         busybox chmod 0600 "$BOOT_INJECTION_PAYLOAD" 2>/dev/null || true
-        busybox echo "fw_cfg" > "$NEWROOT/run/boot-injection/source"
+        busybox echo "fw_cfg" > "$NEWROOT{{BOOT_INJECTION_DIR}}/source"
         msg "Imported boot injection payload from fw_cfg"
         BOOT_INJECTION_IMPORTED="1"
     else
@@ -334,7 +334,7 @@ if [ -z "$BOOT_INJECTION_IMPORTED" ]; then
             if [ -r "$BOOT_INJECTION_MEDIA_DIR/{{BOOT_INJECTION_FILE}}" ]; then
                 if busybox cat "$BOOT_INJECTION_MEDIA_DIR/{{BOOT_INJECTION_FILE}}" > "$BOOT_INJECTION_PAYLOAD"; then
                     busybox chmod 0600 "$BOOT_INJECTION_PAYLOAD" 2>/dev/null || true
-                    busybox echo "iso9660:$dev" > "$NEWROOT/run/boot-injection/source"
+                    busybox echo "iso9660:$dev" > "$NEWROOT{{BOOT_INJECTION_DIR}}/source"
                     msg "Imported boot injection payload from injection ISO ($dev)"
                     BOOT_INJECTION_IMPORTED="1"
                 fi
