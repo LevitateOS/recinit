@@ -2,8 +2,8 @@
 //! answer `--list`) and a stand-in module tree: one loadable module plus
 //! `modules.builtin` naming the rest.
 
-use distro_spec::shared::live_boot::ROOTFS_HANDLE;
-use distro_spec::shared::LIVE_MODULES;
+use recinit::live::ROOTFS_HANDLE;
+use recinit::LIVE_MODULES;
 use flate2::read::GzDecoder;
 use std::collections::BTreeMap;
 use std::fs;

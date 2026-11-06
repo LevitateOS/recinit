@@ -50,11 +50,11 @@ enum Commands {
         iso_label: String,
 
         /// Path to rootfs inside ISO
-        #[arg(long, default_value = distro_spec::shared::ROOTFS_ISO_PATH)]
+        #[arg(long, default_value = recinit::live::ROOTFS_ISO_PATH)]
         rootfs_path: String,
 
         /// Path to live overlay payload image inside ISO
-        #[arg(long, default_value = distro_spec::shared::LIVE_OVERLAYFS_ISO_PATH)]
+        #[arg(long, default_value = recinit::live::LIVE_OVERLAYFS_ISO_PATH)]
         live_overlay_image_path: String,
 
         /// Set a template value (KEY=VALUE), e.g. BOOT_BANNER or PRODUCT_TAG

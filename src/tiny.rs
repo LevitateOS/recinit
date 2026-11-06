@@ -47,9 +47,9 @@ pub struct TinyConfig {
     pub extra_template_vars: Vec<(String, String)>,
 }
 
-/// The boot device probe order shared with the rest of the distro.
+/// The live init's boot device probe order.
 pub fn default_boot_devices() -> Vec<String> {
-    distro_spec::shared::BOOT_DEVICE_PROBE_ORDER
+    crate::live::BOOT_DEVICE_PROBE_ORDER
         .iter()
         .map(|s| s.to_string())
         .collect()
@@ -163,7 +163,7 @@ fn create_init_script(
         .map(|p| format!("/{}", p))
         .unwrap_or_default();
 
-    let mut fixed: Vec<(String, String)> = distro_spec::shared::live_boot::init_template_vars()
+    let mut fixed: Vec<(String, String)> = crate::live::init_template_vars()
         .into_iter()
         .map(|(k, v)| (k.to_string(), v))
         .collect();
