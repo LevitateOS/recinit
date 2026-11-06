@@ -18,9 +18,9 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4", features = ["derive"] }
-distro-spec = { path = "../../distro-spec" }
+distro-spec = { path = "../../distro/spec" }
 flate2 = "1"
-leviso-elf = { path = "../../leviso-elf" }
+leviso-elf = { path = "../../distro/elf" }
 tempfile = "3"
 walkdir = "2"
 
