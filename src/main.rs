@@ -28,7 +28,7 @@ struct Cli {
 enum Commands {
     /// Build a tiny initramfs for live ISO boot
     BuildTiny {
-        /// Path to kernel modules directory (e.g., /lib/modules/6.12.0)
+        /// The kernel's module tree (e.g., /lib/modules/6.12.0)
         #[arg(long)]
         modules_dir: PathBuf,
 
@@ -64,9 +64,6 @@ enum Commands {
         #[arg(long, default_value_t = DEFAULT_GZIP_LEVEL)]
         gzip_level: u32,
 
-        /// Skip checking for built-in modules
-        #[arg(long)]
-        no_builtin_check: bool,
     },
 
     /// Build an install initramfs for booting from disk
@@ -79,9 +76,9 @@ enum Commands {
         #[arg(long)]
         busybox: PathBuf,
 
-        /// Optional path to kernel modules (if different from rootfs)
+        /// The kernel's module tree (e.g., <rootfs>/usr/lib/modules/6.12.0)
         #[arg(long)]
-        modules_path: Option<PathBuf>,
+        modules_dir: PathBuf,
 
         /// Output path for initramfs
         #[arg(short, long, default_value = "initramfs-installed.img")]
@@ -127,7 +124,6 @@ fn main() -> Result<()> {
             live_overlay_image_path,
             template_vars,
             gzip_level,
-            no_builtin_check,
         } => {
             let config = TinyConfig {
                 modules_dir,
@@ -141,7 +137,6 @@ fn main() -> Result<()> {
                 live_overlay_image_path: Some(live_overlay_image_path),
                 extra_template_vars: template_vars,
                 gzip_level,
-                check_builtin: !no_builtin_check,
             };
             build_tiny_initramfs(&config, verbose)?;
         }
@@ -149,7 +144,7 @@ fn main() -> Result<()> {
         Commands::BuildInstall {
             rootfs,
             busybox,
-            modules_path,
+            modules_dir,
             output,
             modules,
             gzip_level,
@@ -160,7 +155,7 @@ fn main() -> Result<()> {
             let config = InstallConfig {
                 rootfs,
                 busybox_path: busybox,
-                modules_path,
+                modules_dir,
                 output,
                 module_preset,
                 gzip_level,
@@ -188,9 +183,8 @@ fn main() -> Result<()> {
             }
 
             let preset_name = preset.unwrap_or_else(|| "live".to_string());
-            let modules = match preset_name.as_str() {
-                "live" | "tiny" => LIVE_MODULES,
-                "install" | "full" => INSTALL_MODULES,
+            let modules = match ModulePreset::parse_name(&preset_name) {
+                Some(preset @ (ModulePreset::Live | ModulePreset::Install)) => preset.names(),
                 _ => bail!(
                     "Unknown preset: {}. Use --list-presets to see available options.",
                     preset_name

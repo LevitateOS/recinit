@@ -40,35 +40,16 @@ fi
 
 busybox echo "Basic mounts done"
 
-# Load kernel modules for boot
-# The Rocky kernel has these as modules, not built-in
+# Load kernel modules for boot, dependencies first. recinit resolved them
+# against this kernel and stored them uncompressed for busybox insmod.
 busybox echo "Loading kernel modules..."
-KVER=$(busybox ls /lib/modules/ 2>/dev/null | busybox head -1)
-if [ -n "$KVER" ]; then
-    MODDIR="/lib/modules/$KVER/kernel"
-    # Load modules manually with insmod (no depmod in busybox)
-    # Order matters: dependencies first
-    # CDROM: cdrom, virtio_scsi (QEMU), sr_mod, isofs
-    # Block: virtio_blk (QEMU disk), loop
-    # Filesystems: erofs, overlay
-    for mod in {{BOOT_MODULES}}; do
-        MODPATH=$(busybox find "$MODDIR" -name "${mod}.ko*" 2>/dev/null | busybox head -1)
-        if [ -n "$MODPATH" ]; then
-            # Decompress if needed
-            case "$MODPATH" in
-                *.xz) busybox xz -d -k "$MODPATH" 2>/dev/null; MODPATH="${MODPATH%.xz}" ;;
-                *.gz) busybox gunzip -k "$MODPATH" 2>/dev/null; MODPATH="${MODPATH%.gz}" ;;
-            esac
-            if busybox insmod "$MODPATH" 2>/dev/null; then
-                busybox echo "  Loaded $mod"
-            else
-                busybox echo "  $mod: already loaded or failed"
-            fi
-        fi
-    done
-else
-    busybox echo "  No kernel modules found"
-fi
+for path in {{BOOT_MODULE_PATHS}}; do
+    if busybox insmod "/lib/modules/{{KERNEL_RELEASE}}/$path" 2>/dev/null; then
+        busybox echo "  Loaded ${path##*/}"
+    else
+        busybox echo "  ${path##*/}: already loaded or failed"
+    fi
+done
 
 busybox echo "Parsing cmdline..."
 # Parse kernel cmdline for parameters

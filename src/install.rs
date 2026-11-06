@@ -7,13 +7,13 @@
 //! 3. Mounts the root filesystem from disk
 //! 4. Hands off to the real systemd
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::busybox::setup_busybox;
 use crate::cpio::build_archive;
-use crate::modules::{copy_kernel_modules, ModulePreset};
+use crate::modules::{KernelModules, ModulePreset};
 use crate::systemd::{copy_firmware, copy_initrd_units, copy_systemd};
 
 /// Configuration for building an install initramfs.
@@ -25,9 +25,8 @@ pub struct InstallConfig {
     /// Path to static busybox binary (emergency shell)
     pub busybox_path: PathBuf,
 
-    /// Optional path to kernel modules (if different from rootfs)
-    /// If None, uses rootfs/usr/lib/modules
-    pub modules_path: Option<PathBuf>,
+    /// The kernel's module tree, `/lib/modules/<release>`
+    pub modules_dir: PathBuf,
 
     /// Output path for the initramfs
     pub output: PathBuf,
@@ -90,31 +89,26 @@ pub fn build_install_initramfs(config: &InstallConfig, verbose: bool) -> Result<
         bail!("rootfs directory not found at {}", config.rootfs.display());
     }
 
-    // Find kernel modules directory (use modules_path if specified, otherwise rootfs)
-    let modules_base = config
-        .modules_path
-        .as_ref()
-        .map(|p| p.join("usr/lib/modules"))
-        .unwrap_or_else(|| config.rootfs.join("usr/lib/modules"));
-    let kernel_version = find_kernel_version(&modules_base)?;
-
+    let kernel = KernelModules::open(&config.modules_dir)?;
+    let resolved = kernel.resolve(&config.module_preset.names())?;
     if verbose {
-        println!("  Kernel version: {}", kernel_version);
+        println!("  Kernel release: {}", kernel.release());
     }
 
     build_archive(&config.output, config.gzip_level, |root| {
         // 1. Create directory structure
         create_install_directory_structure(root, verbose)?;
 
-        // 2. Copy kernel modules (from modules_path if specified, otherwise rootfs)
-        let modules_source = config.modules_path.as_ref().unwrap_or(&config.rootfs);
-        copy_install_modules(
-            modules_source,
-            root,
-            &kernel_version,
-            config,
-            verbose,
-        )?;
+        // Modules go to usr/lib (merged-usr), so the lib -> usr/lib link
+        // made above is not needed for them.
+        let installed = kernel.install(&resolved, root, "usr/lib/modules", false)?;
+        if verbose {
+            println!(
+                "  {} modules installed, {} built into the kernel",
+                installed.len(),
+                resolved.builtin.len()
+            );
+        }
 
         // 3. Copy firmware (optional)
         if config.include_firmware {
@@ -177,22 +171,6 @@ pub fn build_install_initramfs(config: &InstallConfig, verbose: bool) -> Result<
     Ok(())
 }
 
-/// Find kernel version from modules directory.
-fn find_kernel_version(modules_dir: &Path) -> Result<String> {
-    if !modules_dir.exists() {
-        bail!(
-            "Kernel modules directory not found: {}",
-            modules_dir.display()
-        );
-    }
-
-    fs::read_dir(modules_dir)?
-        .filter_map(|e| e.ok())
-        .find(|e| e.path().is_dir())
-        .map(|e| e.file_name().to_string_lossy().to_string())
-        .context("No kernel version directory found in modules")
-}
-
 /// Create install initramfs directory structure.
 fn create_install_directory_structure(root: &Path, verbose: bool) -> Result<()> {
     if verbose {
@@ -218,52 +196,6 @@ fn create_install_directory_structure(root: &Path, verbose: bool) -> Result<()> 
         if !link_path.exists() && !link_path.is_symlink() {
             std::os::unix::fs::symlink(target, &link_path)?;
         }
-    }
-
-    Ok(())
-}
-
-/// Copy kernel modules for installed system boot.
-fn copy_install_modules(
-    rootfs_staging: &Path,
-    initramfs_root: &Path,
-    kernel_version: &str,
-    config: &InstallConfig,
-    verbose: bool,
-) -> Result<()> {
-    if verbose {
-        println!("Copying kernel modules for installed boot...");
-    }
-
-    let src_dir = rootfs_staging.join("usr/lib/modules").join(kernel_version);
-    let modules = config.module_preset.module_paths();
-
-    let (copied, builtin, missing) = copy_kernel_modules(
-        &src_dir,
-        initramfs_root,
-        &modules,
-        true, // Check for built-in modules
-    )?;
-
-    // Missing modules are warnings for install initramfs (not fatal)
-    if !missing.is_empty() && verbose {
-        println!(
-            "  [WARN] {} modules not found (may be built-in or unavailable):",
-            missing.len()
-        );
-        for m in missing.iter().take(5) {
-            println!("    - {}", m);
-        }
-        if missing.len() > 5 {
-            println!("    ... and {} more", missing.len() - 5);
-        }
-    }
-
-    if verbose {
-        if builtin > 0 {
-            println!("  {} boot modules are built-in to kernel", builtin);
-        }
-        println!("  Copied {} boot modules", copied);
     }
 
     Ok(())

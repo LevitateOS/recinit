@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use crate::busybox::setup_busybox;
 use crate::cpio::build_archive;
-use crate::modules::{copy_kernel_modules, module_name, ModulePreset};
+use crate::modules::{KernelModules, ModulePreset};
 
 /// Configuration for building a tiny/live initramfs.
 #[derive(Debug, Clone)]
@@ -48,9 +48,6 @@ pub struct TinyConfig {
 
     /// Gzip compression level (1-9)
     pub gzip_level: u32,
-
-    /// Whether to check for built-in modules
-    pub check_builtin: bool,
 
     /// Template values set by the caller: `BOOT_BANNER` and `PRODUCT_TAG`
     /// override their defaults; any other key must name a placeholder that
@@ -95,8 +92,8 @@ pub fn build_tiny_initramfs(config: &TinyConfig, verbose: bool) -> Result<()> {
             println!("Setting up busybox...");
         }
         setup_busybox(&config.busybox_path, root)?;
-        copy_boot_modules(config, root, verbose)?;
-        create_init_script(config, root, verbose)
+        let module_vars = install_boot_modules(config, root, verbose)?;
+        create_init_script(config, &module_vars, root, verbose)
     })?;
 
     if verbose {
@@ -122,43 +119,28 @@ fn create_directory_structure(root: &Path, verbose: bool) -> Result<()> {
     Ok(())
 }
 
-/// Copy boot kernel modules to initramfs.
-fn copy_boot_modules(config: &TinyConfig, initramfs_root: &Path, verbose: bool) -> Result<()> {
+/// Install the boot modules (decompressed, for busybox `insmod`) and return
+/// the template values that load them in dependency order.
+fn install_boot_modules(
+    config: &TinyConfig,
+    initramfs_root: &Path,
+    verbose: bool,
+) -> Result<Vec<(String, String)>> {
+    let kernel = KernelModules::open(&config.modules_dir)?;
+    let resolved = kernel.resolve(&config.module_preset.names())?;
+    let paths = kernel.install(&resolved, initramfs_root, "lib/modules", true)?;
     if verbose {
-        println!("Copying boot kernel modules...");
-    }
-
-    let modules = config.module_preset.module_paths();
-
-    let (copied, builtin, missing) = copy_kernel_modules(
-        &config.modules_dir,
-        initramfs_root,
-        &modules,
-        config.check_builtin,
-    )?;
-
-    // For live initramfs, missing modules are fatal
-    if !missing.is_empty() {
-        bail!(
-            "Boot modules missing: {:?}\n\
-             \n\
-             These kernel modules are REQUIRED for the ISO to boot:\n\
-             - cdrom, sr_mod, virtio_scsi, isofs (CDROM access)\n\
-             - loop, erofs, overlay (EROFS + overlay boot)\n\
-             \n\
-             Without ALL of these, the initramfs cannot mount the EROFS rootfs.",
-            missing
+        println!(
+            "  {} boot modules installed, {} built into kernel {}",
+            paths.len(),
+            resolved.builtin.len(),
+            kernel.release()
         );
     }
-
-    if verbose {
-        if builtin > 0 {
-            println!("  {} boot modules are built-in to kernel", builtin);
-        }
-        println!("  Copied {} boot modules", copied);
-    }
-
-    Ok(())
+    Ok(vec![
+        ("KERNEL_RELEASE".to_string(), kernel.release().to_string()),
+        ("BOOT_MODULE_PATHS".to_string(), paths.join(" ")),
+    ])
 }
 
 /// The live init template shipped with recinit.
@@ -172,7 +154,12 @@ const OVERRIDABLE: &[(&str, &str)] = &[
 
 /// Create init script from template. Every placeholder must be filled, and
 /// every value set must be used, so template and filler cannot drift apart.
-fn create_init_script(config: &TinyConfig, initramfs_root: &Path, verbose: bool) -> Result<()> {
+fn create_init_script(
+    config: &TinyConfig,
+    module_vars: &[(String, String)],
+    initramfs_root: &Path,
+    verbose: bool,
+) -> Result<()> {
     if verbose {
         println!("Creating init script from template...");
     }
@@ -183,12 +170,6 @@ fn create_init_script(config: &TinyConfig, initramfs_root: &Path, verbose: bool)
         None => DEFAULT_TEMPLATE.to_string(),
     };
 
-    let module_names: Vec<&str> = config
-        .module_preset
-        .module_paths()
-        .iter()
-        .map(|m| module_name(m))
-        .collect();
     let overlay_image_path = config
         .live_overlay_image_path
         .as_ref()
@@ -202,10 +183,10 @@ fn create_init_script(config: &TinyConfig, initramfs_root: &Path, verbose: bool)
     fixed.extend([
         ("ISO_LABEL".to_string(), config.iso_label.clone()),
         ("ROOTFS_PATH".to_string(), format!("/{}", config.rootfs_path)),
-        ("BOOT_MODULES".to_string(), module_names.join(" ")),
         ("BOOT_DEVICES".to_string(), config.boot_devices.join(" ")),
         ("LIVE_OVERLAY_IMAGE_PATH".to_string(), overlay_image_path),
     ]);
+    fixed.extend(module_vars.iter().cloned());
     let mut vars = fixed.clone();
     vars.extend(OVERRIDABLE.iter().map(|(k, v)| (k.to_string(), v.to_string())));
     for (key, value) in &config.extra_template_vars {
