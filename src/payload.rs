@@ -23,6 +23,7 @@ pub const EXECUTABLES: &[&str] = &[
     "usr/lib/systemd/systemd-fsck",
     "usr/lib/systemd/systemd-remount-fs",
     "usr/lib/systemd/systemd-sulogin-shell",
+    "usr/sbin/sulogin",
     "usr/lib/systemd/systemd-shutdown",
     "usr/lib/systemd/systemd-executor",
     "usr/lib/systemd/systemd-makefs",
@@ -74,6 +75,7 @@ pub const UNITS: &[&str] = &[
     "timers.target",
     "swap.target",
     "emergency.target",
+    "emergency.service",
     "rescue.target",
     "systemd-journald.service",
     "systemd-udevd.service",
@@ -128,7 +130,34 @@ pub const WANTS: &[(&str, &str)] = &[
     ("sockets.target", "systemd-udevd-control.socket"),
     ("sockets.target", "systemd-udevd-kernel.socket"),
     ("initrd.target", "initrd-parse-etc.service"),
+    ("emergency.target", EMERGENCY_REBOOT_UNIT),
     ("initrd-switch-root.target", "initrd-cleanup.service"),
+];
+
+/// `rd.emergency=reboot` (the name dracut uses): instead of an emergency
+/// shell, reboot. An A/B trial boot carries it (recab), so a slot whose
+/// initramfs cannot mount its root returns to the default slot; a committed
+/// slot does not, and still gets a shell to repair it.
+pub const EMERGENCY_REBOOT_OPTION: &str = "rd.emergency=reboot";
+pub const EMERGENCY_REBOOT_UNIT: &str = "recinit-emergency-reboot.service";
+
+/// Units recinit writes itself, into `UNIT_DIR` (a `.d/` path is a drop-in).
+pub const GENERATED_UNITS: &[(&str, &str)] = &[
+    (
+        EMERGENCY_REBOOT_UNIT,
+        "[Unit]\n\
+Description=Reboot instead of an emergency shell (rd.emergency=reboot)\n\
+DefaultDependencies=no\n\
+ConditionKernelCommandLine=rd.emergency=reboot\n\
+\n\
+[Service]\n\
+Type=oneshot\n\
+ExecStart=/usr/bin/systemctl --no-block reboot\n",
+    ),
+    (
+        "emergency.service.d/recinit-emergency-reboot.conf",
+        "[Unit]\nConditionKernelCommandLine=!rd.emergency=reboot\n",
+    ),
 ];
 
 /// Lines removed from units: udev's `ConditionPathIsReadWrite=/sys` is false
@@ -252,6 +281,13 @@ pub fn install(rootfs: &Path, root: &Path) -> Result<()> {
         let content = fs::read_to_string(&path)?;
         let kept: Vec<&str> = content.lines().filter(|l| l.trim() != *line).collect();
         fs::write(&path, kept.join("\n") + "\n")?;
+    }
+    for (name, content) in GENERATED_UNITS {
+        let path = unit_dir.join(name);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(path, content)?;
     }
     std::os::unix::fs::symlink(DEFAULT_TARGET, unit_dir.join("default.target"))?;
     for (target, unit) in WANTS {
