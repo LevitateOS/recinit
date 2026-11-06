@@ -131,25 +131,3 @@ pub fn init_template_vars() -> Vec<(&'static str, String)> {
         ("ROOTFS_MISSING_MESSAGE", ROOTFS_MISSING_MESSAGE.to_string()),
     ]
 }
-
-/// POSIX shell that exports the imported boot-injection payload's KEY=VALUE
-/// lines (as data: nothing in it is executed). Live shell scripts embed it.
-pub fn boot_injection_import_sh() -> String {
-    format!(
-        r#"if [ -r {env} ]; then
-    while IFS= read -r line; do
-        case "$line" in
-            ""|\#*) continue ;;
-            *=*)
-                key="${{line%%=*}}"
-                value="${{line#*=}}"
-                case "$key" in
-                    [A-Za-z_][A-Za-z0-9_]*) export "$key=$value" ;;
-                esac
-                ;;
-        esac
-    done < {env}
-fi"#,
-        env = BOOT_INJECTION_ENV
-    )
-}
