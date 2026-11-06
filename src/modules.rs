@@ -15,11 +15,10 @@ pub use distro_spec::shared::{INSTALL_MODULES, LIVE_MODULES, MODULE_METADATA_FIL
 /// Which modules to put in an initramfs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModulePreset {
-    /// Minimal modules for live ISO boot (CDROM, EROFS, overlay, virtio)
+    /// Minimal modules for live ISO boot (CD-ROM, SATA, virtio, loop, overlay)
     Live,
     /// Full modules for installed systems (NVMe, SATA, USB, ext4, xfs, btrfs)
     Install,
-    /// Custom module list
     Custom(Vec<String>),
 }
 

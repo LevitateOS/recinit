@@ -1,23 +1,22 @@
 #!/bin/busybox sh
-# LevitateOS Tiny Initramfs
-# Mounts EROFS + overlay, then switch_root to live system
+# Live initramfs /init, rendered by recinit: mounts the EROFS rootfs under an
+# overlay, then switch_roots into the live system.
 #
-# REQUIREMENTS:
-# - Kernel built with CONFIG_EROFS_FS=y, CONFIG_BLK_DEV_LOOP=y, CONFIG_OVERLAY_FS=y
-# - ISO labeled "{{ISO_LABEL}}" (set by xorriso -V)
-# - Kernel cmdline: root=LABEL={{ISO_LABEL}}
+# The kernel must have EROFS built in (CONFIG_EROFS_FS=y); loop and overlay
+# may be built in or among the boot modules recinit installs.
 #
-# BOOT FLOW:
-# 1. GRUB loads kernel + this initramfs
-# 2. Kernel unpacks initramfs to rootfs, runs /init (this script)
-# 3. Mount /proc, /sys, /dev
-# 4. Find boot device by looking for /live/filesystem.erofs
-# 5. Mount EROFS read-only
-# 6. Create overlay (erofs lower + tmpfs upper)
-# 7. switch_root to overlay
-# 8. systemd takes over as PID 1
+# Boot flow:
+# 1. Mount /proc, /sys, /dev; move output to the serial console if present.
+# 2. insmod the boot modules.
+# 3. Find the boot medium: the first probe device that mounts and has /boot.
+#    root=LABEL= on the cmdline is only reported, not matched.
+# 4. Mount the rootfs and the optional live-overlay payload (EROFS), each from
+#    a payload partition found by its role file or from a file on the medium.
+# 5. Mount the overlay: tmpfs upper over live-overlay over rootfs.
+# 6. Import the optional boot injection payload (fw_cfg or a second ISO).
+# 7. Move /dev, /proc, /sys and the boot medium into the new root and
+#    switch_root to /sbin/init.
 
-# Debug: print every command
 busybox echo "=== INIT STARTING ==="
 
 # Minimal PATH - busybox provides everything
@@ -52,7 +51,6 @@ for path in {{BOOT_MODULE_PATHS}}; do
 done
 
 busybox echo "Parsing cmdline..."
-# Parse kernel cmdline for parameters
 CMDLINE=$(busybox cat /proc/cmdline)
 busybox echo "CMDLINE: $CMDLINE"
 ROOT_LABEL=""
@@ -66,7 +64,6 @@ for param in $CMDLINE; do
     esac
 done
 
-# Default label if not specified
 [ -z "$ROOT_LABEL" ] && ROOT_LABEL="{{ISO_LABEL}}"
 busybox echo "ROOT_LABEL: $ROOT_LABEL"
 
@@ -91,7 +88,6 @@ msg "Searching for boot device with label '$ROOT_LABEL'..."
 busybox echo "Sleeping 1s for devices..."
 busybox sleep 1
 
-# List block devices
 busybox echo "Block devices:"
 busybox ls -la /dev/sr* /dev/sd* /dev/vd* /dev/nvme* 2>/dev/null || busybox echo "(none found)"
 
@@ -101,7 +97,7 @@ if [ ! -e /dev/sr0 ] && [ ! -e /dev/sda ]; then
     busybox sleep 2
 fi
 
-# Find the ISO boot media by volume label.
+# The boot medium is the first probe device that mounts and has /boot.
 BOOT_DEV=""
 DEVICES="{{BOOT_DEVICES}}"
 
@@ -145,7 +141,6 @@ if [ -n "$EMERGENCY" ]; then
     busybox sh
 fi
 
-# Create mount points for overlay
 busybox mkdir -p /rootfs /live-overlay /overlay /overlay/upper /overlay/work /newroot /probe
 
 part_name() {
@@ -259,7 +254,7 @@ fi
 #
 # OverlayFS syntax: lowerdir=<higher>:<lower> (colon-separated, rightmost is lowest)
 # With live overlay payload: lowerdir=/live-overlay:/rootfs (mount point still named /rootfs)
-# Without live overlay: lowerdir=/rootfs (installed system)
+# Without live overlay: lowerdir=/rootfs
 NEWROOT="/newroot"
 msg "Creating overlay filesystem..."
 busybox mount -t tmpfs -o size=50% tmpfs /overlay
@@ -352,8 +347,8 @@ if [ -z "$BOOT_INJECTION_IMPORTED" ]; then
 fi
 
 if [ -r "$BOOT_INJECTION_PAYLOAD" ]; then
-    # First-class Stage 01 SSH key handoff: host injects SSH_AUTHORIZED_KEY
-    # (or SSH_AUTHORIZED_KEYS) and initramfs wires it into root authorized_keys.
+    # SSH key handoff: the host injects SSH_AUTHORIZED_KEY (or
+    # SSH_AUTHORIZED_KEYS, ';'-separated), which becomes root's authorized_keys.
     SSH_KEYS="$(busybox sed -n \
         -e 's/^SSH_AUTHORIZED_KEY=//p' \
         -e 's/^SSH_AUTHORIZED_KEYS=//p' \
@@ -369,13 +364,10 @@ elif [ -n "$BOOT_INJECTION_REQUIRED" ]; then
     emergency_shell "Required boot injection payload missing (boot_injection=required)"
 fi
 
-# Prepare for switch_root
 msg "Preparing switch_root..."
 
-# Ensure mount move targets exist in the target root.
 busybox mkdir -p "$NEWROOT/dev" "$NEWROOT/proc" "$NEWROOT/sys"
 
-# Move virtual filesystems to new root
 busybox mount --move /dev "$NEWROOT/dev"
 busybox mount --move /proc "$NEWROOT/proc"
 busybox mount --move /sys "$NEWROOT/sys"
@@ -386,18 +378,15 @@ busybox mount --move /sys "$NEWROOT/sys"
 busybox mkdir -p "$NEWROOT{{LIVE_MEDIA_DIR}}"
 busybox mount --move /mnt "$NEWROOT{{LIVE_MEDIA_DIR}}"
 
-# Verify init exists
 if [ ! -x "$NEWROOT/sbin/init" ] && [ ! -L "$NEWROOT/sbin/init" ]; then
     msg "Contents of $NEWROOT/sbin:"
     busybox ls -la "$NEWROOT/sbin/"
     emergency_shell "/newroot/sbin/init not found or not executable"
 fi
 
-# Final message before handoff
 msg "Switching root to live system..."
 msg ""
 
-# switch_root replaces the current root filesystem and execs init
 exec busybox switch_root "$NEWROOT" /sbin/init
 
 # If we get here, something went very wrong

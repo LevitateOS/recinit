@@ -205,14 +205,11 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Parse module preset from string.
 fn parse_module_preset(s: &str) -> Result<ModulePreset> {
-    // Check for preset names
     if let Some(preset) = ModulePreset::parse_name(s) {
         return Ok(preset);
     }
 
-    // Otherwise, treat as comma-separated custom list
     Ok(ModulePreset::Custom(
         s.split(',').map(|s| s.trim().to_string()).collect(),
     ))

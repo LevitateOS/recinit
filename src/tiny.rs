@@ -1,11 +1,6 @@
-//! Tiny/live initramfs builder.
-//!
-//! Builds a small (~5MB) busybox-based initramfs for live ISO boot.
-//! This initramfs:
-//! 1. Loads kernel modules for storage access
-//! 2. Finds and mounts the EROFS root filesystem
-//! 3. Creates an overlay for writable storage
-//! 4. switch_root to the live system
+//! The busybox-based live initramfs: busybox, the boot modules, and an init
+//! script rendered from a template (see `templates/init_tiny.template` for
+//! what it does at boot).
 
 use anyhow::{bail, Context, Result};
 use std::fs;
@@ -16,19 +11,17 @@ use crate::busybox::setup_busybox;
 use crate::cpio::build_archive;
 use crate::modules::{KernelModules, ModulePreset};
 
-/// Configuration for building a tiny/live initramfs.
 #[derive(Debug, Clone)]
 pub struct TinyConfig {
     /// Path to kernel modules directory (e.g., /usr/lib/modules/6.12.0)
     pub modules_dir: PathBuf,
 
-    /// Path to busybox static binary
+    /// Static busybox binary
     pub busybox_path: PathBuf,
 
     /// Init script template; `None` uses the template built into recinit.
     pub template_path: Option<PathBuf>,
 
-    /// Output path for the initramfs (e.g., initramfs.cpio.gz)
     pub output: PathBuf,
 
     /// ISO volume label (used for finding boot device)
@@ -40,10 +33,9 @@ pub struct TinyConfig {
     /// Path to live overlay payload image inside ISO (e.g., "live/overlayfs.erofs")
     pub live_overlay_image_path: Option<String>,
 
-    /// Boot devices to probe in order
+    /// Devices the init script probes, in order, for the boot medium
     pub boot_devices: Vec<String>,
 
-    /// Module preset to use
     pub module_preset: ModulePreset,
 
     /// Gzip compression level (1-9)
@@ -55,9 +47,7 @@ pub struct TinyConfig {
     pub extra_template_vars: Vec<(String, String)>,
 }
 
-/// Default boot device probe order.
-///
-/// Uses the shared constant from distro-spec for consistency.
+/// The boot device probe order shared with the rest of the distro.
 pub fn default_boot_devices() -> Vec<String> {
     distro_spec::shared::BOOT_DEVICE_PROBE_ORDER
         .iter()
@@ -65,7 +55,6 @@ pub fn default_boot_devices() -> Vec<String> {
         .collect()
 }
 
-/// Directories to create in initramfs root.
 pub const INITRAMFS_DIRS: &[&str] = &[
     "bin",
     "dev",
@@ -80,7 +69,6 @@ pub const INITRAMFS_DIRS: &[&str] = &[
     "live-overlay",
 ];
 
-/// Build a tiny initramfs for live ISO boot.
 pub fn build_tiny_initramfs(config: &TinyConfig, verbose: bool) -> Result<()> {
     if verbose {
         println!("=== Building Tiny Initramfs ===\n");
@@ -106,7 +94,6 @@ pub fn build_tiny_initramfs(config: &TinyConfig, verbose: bool) -> Result<()> {
     Ok(())
 }
 
-/// Create the initramfs directory structure.
 fn create_directory_structure(root: &Path, verbose: bool) -> Result<()> {
     if verbose {
         println!("Creating directory structure...");
@@ -152,8 +139,8 @@ const OVERRIDABLE: &[(&str, &str)] = &[
     ("PRODUCT_TAG", "untagged"),
 ];
 
-/// Create init script from template. Every placeholder must be filled, and
-/// every value set must be used, so template and filler cannot drift apart.
+/// Render the init script. Every placeholder must be filled, and every value
+/// the caller sets must be used, so template and filler cannot drift apart.
 fn create_init_script(
     config: &TinyConfig,
     module_vars: &[(String, String)],
@@ -218,7 +205,6 @@ fn create_init_script(
     let init_dst = initramfs_root.join("init");
     fs::write(&init_dst, &init_content)?;
 
-    // Make executable
     let mut perms = fs::metadata(&init_dst)?.permissions();
     perms.set_mode(0o755);
     fs::set_permissions(&init_dst, perms)?;

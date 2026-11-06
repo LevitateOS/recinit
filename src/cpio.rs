@@ -1,7 +1,4 @@
-//! CPIO archive creation for initramfs.
-//!
-//! Provides utilities for creating compressed cpio archives
-//! used as initramfs images.
+//! Gzip-compressed newc cpio archives for initramfs images.
 
 use anyhow::{Context, Result};
 use flate2::write::GzEncoder;
@@ -59,7 +56,6 @@ fn build_cpio(root: &Path, output: &Path, gzip_level: u32) -> Result<()> {
         let entry = entry?;
         let path = entry.path();
 
-        // Get path relative to root, starting with "."
         let rel_path = path.strip_prefix(root).unwrap_or(path);
         let name = if rel_path.as_os_str().is_empty() {
             ".".to_string()
@@ -77,7 +73,6 @@ fn build_cpio(root: &Path, output: &Path, gzip_level: u32) -> Result<()> {
     Ok(())
 }
 
-/// CPIO archive writer in newc format.
 struct CpioWriter<W: Write> {
     writer: W,
     next_ino: u32,
@@ -88,11 +83,9 @@ impl<W: Write> CpioWriter<W> {
         Self { writer, next_ino: 1 }
     }
 
-    /// Add an entry to the archive.
     fn add_entry(&mut self, path: &Path, name: &str) -> Result<()> {
         let metadata = fs::symlink_metadata(path)?;
 
-        // Determine file type mode bits
         let file_type = metadata.file_type();
         let mode = if file_type.is_dir() {
             0o040000 | (metadata.permissions().mode() & 0o7777)
@@ -102,7 +95,6 @@ impl<W: Write> CpioWriter<W> {
             0o100000 | (metadata.permissions().mode() & 0o7777)
         };
 
-        // Get file size (for regular files and symlinks)
         let filesize = if file_type.is_symlink() {
             fs::read_link(path)?.as_os_str().len() as u32
         } else if file_type.is_file() {
@@ -132,7 +124,6 @@ impl<W: Write> CpioWriter<W> {
             name,
         )?;
 
-        // Write file content
         if file_type.is_symlink() {
             let target = fs::read_link(path)?;
             let target_bytes = target.as_os_str().as_encoded_bytes();
@@ -147,7 +138,6 @@ impl<W: Write> CpioWriter<W> {
         Ok(())
     }
 
-    /// Write a CPIO header in newc format.
     #[allow(clippy::too_many_arguments)]
     fn write_header(
         &mut self,
@@ -188,16 +178,15 @@ impl<W: Write> CpioWriter<W> {
 
         self.writer.write_all(header.as_bytes())?;
         self.writer.write_all(name_bytes)?;
-        self.writer.write_all(&[0])?; // Null terminator
+        self.writer.write_all(&[0])?;
 
-        // Pad header + name to 4-byte boundary
+        // The header is 110 bytes; header + name are padded to 4 bytes.
         let header_total = 110 + namesize;
         self.write_padding(header_total)?;
 
         Ok(())
     }
 
-    /// Write padding to align to 4-byte boundary.
     fn write_padding(&mut self, size: usize) -> Result<()> {
         let padding = (4 - (size % 4)) % 4;
         if padding > 0 {
@@ -206,7 +195,6 @@ impl<W: Write> CpioWriter<W> {
         Ok(())
     }
 
-    /// Write the trailer entry and finish the archive.
     fn finish(mut self) -> Result<W> {
         // TRAILER!!! entry marks end of archive
         self.write_header(
