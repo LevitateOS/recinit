@@ -8,11 +8,11 @@ use flate2::write::GzEncoder;
 use flate2::Compression;
 use std::fs::{self, File};
 use std::io::{self, Write};
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use walkdir::WalkDir;
 
-/// CPIO newc format header size (110 bytes + filename + padding)
+/// newc header magic.
 const CPIO_HEADER_MAGIC: &str = "070701";
 
 /// Build an initramfs at `output`: `fill` populates a private scratch tree
@@ -54,8 +54,8 @@ fn build_cpio(root: &Path, output: &Path, gzip_level: u32) -> Result<()> {
     let encoder = GzEncoder::new(file, Compression::new(gzip_level));
     let mut writer = CpioWriter::new(encoder);
 
-    // Walk the directory tree
-    for entry in WalkDir::new(root).follow_links(false) {
+    // Sorted, so the same tree always gives the same archive.
+    for entry in WalkDir::new(root).follow_links(false).sort_by_file_name() {
         let entry = entry?;
         let path = entry.path();
 
@@ -70,20 +70,22 @@ fn build_cpio(root: &Path, output: &Path, gzip_level: u32) -> Result<()> {
         writer.add_entry(path, &name)?;
     }
 
-    // Write trailer
-    writer.finish()?;
-
+    writer
+        .finish()?
+        .finish()
+        .with_context(|| format!("finishing {}", output.display()))?;
     Ok(())
 }
 
 /// CPIO archive writer in newc format.
 struct CpioWriter<W: Write> {
     writer: W,
+    next_ino: u32,
 }
 
 impl<W: Write> CpioWriter<W> {
     fn new(writer: W) -> Self {
-        Self { writer }
+        Self { writer, next_ino: 1 }
     }
 
     /// Add an entry to the archive.
@@ -109,14 +111,19 @@ impl<W: Write> CpioWriter<W> {
             0
         };
 
-        // Write header
+        // Nothing from the build host leaks in: entries are numbered in
+        // archive order, owned by root, and never hard links (each file's
+        // data is written in full).
+        let ino = self.next_ino;
+        self.next_ino += 1;
+        let nlink = if file_type.is_dir() { 2 } else { 1 };
         self.write_header(
-            metadata.ino() as u32,
+            ino,
             mode,
-            metadata.uid(),
-            metadata.gid(),
-            metadata.nlink() as u32,
-            0, // mtime - use 0 for reproducibility
+            0, // uid
+            0, // gid
+            nlink,
+            0, // mtime
             filesize,
             0, // dev major
             0, // dev minor
