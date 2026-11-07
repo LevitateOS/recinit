@@ -5,7 +5,7 @@
 //! same tables.
 
 use anyhow::{bail, Context, Result};
-use leviso_elf::{copy_library_to, get_all_dependencies};
+use crate::elf::{copy_library_to, get_all_dependencies};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -303,7 +303,7 @@ pub fn install(rootfs: &Path, root: &Path) -> Result<()> {
         copy_file(&require(rootfs, file)?, &root.join(file), None)?;
     }
     for tree in TREES {
-        leviso_elf::copy_dir_recursive(&require(rootfs, tree)?, &root.join(tree))?;
+        crate::elf::copy_dir_recursive(&require(rootfs, tree)?, &root.join(tree))?;
     }
 
     let etc = root.join("etc");
@@ -325,7 +325,7 @@ pub fn install(rootfs: &Path, root: &Path) -> Result<()> {
 pub fn copy_firmware(rootfs: &Path, root: &Path) -> Result<()> {
     let src = rootfs.join("usr/lib/firmware");
     if src.exists() {
-        leviso_elf::copy_dir_recursive(&src, &root.join("usr/lib/firmware"))?;
+        crate::elf::copy_dir_recursive(&src, &root.join("usr/lib/firmware"))?;
     }
     Ok(())
 }

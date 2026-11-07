@@ -5,6 +5,7 @@
 //! privileges or external tools like dracut.
 
 mod busybox;
+mod elf;
 mod cpio;
 mod install;
 pub mod live;

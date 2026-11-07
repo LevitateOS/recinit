@@ -19,7 +19,6 @@ path = "src/main.rs"
 anyhow = "1.0"
 clap = { version = "4", features = ["derive"] }
 flate2 = "1"
-leviso-elf = { path = "../../distro/elf" }
 tempfile = "3"
 walkdir = "2"
 
