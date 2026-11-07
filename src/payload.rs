@@ -208,7 +208,10 @@ pub const ETC_FILES: &[(&str, &str)] = &[
 
 /// systemd recognises an initrd by this file; it is the rootfs's own os-release.
 pub const INITRD_RELEASE: &str = "etc/initrd-release";
-const OS_RELEASE: &str = "usr/lib/os-release";
+// /etc takes precedence over the vendor identity, and contract-built systems
+// may supply only this file.
+const OS_RELEASE: &str = "etc/os-release";
+const VENDOR_OS_RELEASE: &str = "usr/lib/os-release";
 
 /// Where libraries go in the initramfs.
 const LIB_DIR: &str = "usr/lib64";
@@ -308,7 +311,12 @@ pub fn install(rootfs: &Path, root: &Path) -> Result<()> {
     for (path, content) in ETC_FILES {
         fs::write(root.join(path), content)?;
     }
-    fs::copy(require(rootfs, OS_RELEASE)?, root.join(INITRD_RELEASE))?;
+    let identity = if rootfs.join(OS_RELEASE).is_file() {
+        require(rootfs, OS_RELEASE)?
+    } else {
+        require(rootfs, VENDOR_OS_RELEASE)?
+    };
+    fs::copy(identity, root.join(INITRD_RELEASE))?;
     std::os::unix::fs::symlink(format!("/{INIT}"), root.join("init"))?;
     Ok(())
 }
