@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 
 use crate::busybox::setup_busybox;
 use crate::cpio::build_archive;
-use crate::live::{BOOT_DEVICE_PROBE_ORDER, LIVE_OVERLAYFS_ISO_PATH, ROOTFS_ISO_PATH};
 use crate::modules::{KernelModules, LIVE_MODULES};
 
 #[derive(Debug, Clone)]
@@ -22,7 +21,8 @@ pub struct TinyConfig {
 
     pub output: PathBuf,
 
-    /// ISO volume label (used for finding boot device)
+    /// The boot medium's volume label, which the init finds it by (a
+    /// `root=LABEL=` on the command line overrides it)
     pub iso_label: String,
 
     /// The line the init prints first.
@@ -32,18 +32,14 @@ pub struct TinyConfig {
     pub gzip_level: u32,
 }
 
-pub const INITRAMFS_DIRS: &[&str] = &[
-    "bin",
-    "dev",
-    "proc",
-    "sys",
-    "tmp",
-    "mnt",
-    "lib/modules",
-    "rootfs",
-    "overlay",
-    "newroot",
-    "live-overlay",
+/// The live initramfs's directories (the live protocol's).
+pub const INITRAMFS_DIRS: &[&str] = crate::live::INIT_DIRS;
+
+/// Busybox applets the init template runs; a busybox without one would
+/// build an initramfs that cannot boot.
+pub const LIVE_INIT_APPLETS: &[&str] = &[
+    "sh", "mount", "umount", "insmod", "findfs", "blkid", "mkdir", "touch", "ln", "cat", "chmod",
+    "echo", "sed", "tr", "sleep", "chroot", "switch_root",
 ];
 
 pub fn build_tiny_initramfs(config: &TinyConfig, verbose: bool) -> Result<()> {
@@ -56,7 +52,16 @@ pub fn build_tiny_initramfs(config: &TinyConfig, verbose: bool) -> Result<()> {
         if verbose {
             println!("Setting up busybox...");
         }
-        setup_busybox(&config.busybox_path, root)?;
+        let applets = setup_busybox(&config.busybox_path, root)?;
+        let missing: Vec<&str> =
+            LIVE_INIT_APPLETS.iter().copied().filter(|a| !applets.iter().any(|have| have == a)).collect();
+        if !missing.is_empty() {
+            bail!(
+                "{} lacks applets the live init runs: {}",
+                config.busybox_path.display(),
+                missing.join(", ")
+            );
+        }
         let module_vars = install_boot_modules(config, root, verbose)?;
         create_init_script(config, &module_vars, root, verbose)
     })?;
@@ -128,9 +133,6 @@ fn create_init_script(
         .collect();
     vars.extend([
         ("ISO_LABEL".to_string(), config.iso_label.clone()),
-        ("ROOTFS_PATH".to_string(), format!("/{ROOTFS_ISO_PATH}")),
-        ("BOOT_DEVICES".to_string(), BOOT_DEVICE_PROBE_ORDER.join(" ")),
-        ("LIVE_OVERLAY_IMAGE_PATH".to_string(), format!("/{LIVE_OVERLAYFS_ISO_PATH}")),
         ("BOOT_BANNER".to_string(), config.boot_banner.clone()),
     ]);
     vars.extend(module_vars.iter().cloned());

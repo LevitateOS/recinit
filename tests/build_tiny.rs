@@ -3,7 +3,7 @@
 //! `modules.builtin` naming the rest.
 
 use recinit::live::ROOTFS_HANDLE;
-use recinit::LIVE_MODULES;
+use recinit::{LIVE_INIT_APPLETS, LIVE_MODULES};
 use flate2::read::GzDecoder;
 use std::collections::BTreeMap;
 use std::fs;
@@ -16,7 +16,8 @@ const RELEASE: &str = "6.0.0-recinit-test";
 
 fn fixture(dir: &Path) {
     let busybox = dir.join("busybox");
-    fs::write(&busybox, "#!/bin/sh\n[ \"$1\" = --list ] && printf 'sh\\nmount\\n'\n").unwrap();
+    let applets = LIVE_INIT_APPLETS.join("\\n");
+    fs::write(&busybox, format!("#!/bin/sh\n[ \"$1\" = --list ] && printf '{applets}\\n'\n")).unwrap();
     fs::set_permissions(&busybox, fs::Permissions::from_mode(0o755)).unwrap();
 
     let modules = dir.join(RELEASE);

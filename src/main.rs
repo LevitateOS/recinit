@@ -66,7 +66,7 @@ enum Commands {
         modules_dir: PathBuf,
 
         /// Output path for initramfs
-        #[arg(short, long, default_value = "initramfs-installed.img")]
+        #[arg(short, long, default_value = recinit::live::INITRAMFS_INSTALLED_FILENAME)]
         output: PathBuf,
 
         /// Gzip compression level (1-9)

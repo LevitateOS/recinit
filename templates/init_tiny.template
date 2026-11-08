@@ -1,393 +1,207 @@
 #!/bin/busybox sh
 # Live initramfs /init, rendered by recinit: mounts the EROFS rootfs under an
-# overlay, then switch_roots into the live system.
+# overlay, then switch_roots into the live system. Every path, command-line
+# word and filesystem type comes from recinit's live protocol (src/live.rs).
 #
 # The kernel must have EROFS built in (CONFIG_EROFS_FS=y); loop and overlay
 # may be built in or among the boot modules recinit installs.
 #
 # Boot flow:
-# 1. Mount /proc, /sys, /dev; move output to the serial console if present.
+# 1. Mount /proc, /sys, /dev. Messages go to the kernel log (every console);
+#    the emergency shell runs on /dev/console, the last console= named.
 # 2. insmod the boot modules.
-# 3. Find the boot medium: the first probe device that mounts and has /boot.
-#    root=LABEL= on the cmdline is only reported, not matched.
-# 4. Mount the rootfs and the optional live-overlay payload (EROFS), each from
-#    a payload partition found by its role file or from a file on the medium.
+# 3. Find the boot medium by its label (root=LABEL=), waiting for it to
+#    appear until a deadline.
+# 4. Mount the rootfs and the optional live-overlay payload (EROFS files on
+#    the medium).
 # 5. Mount the overlay: tmpfs upper over live-overlay over rootfs.
-# 6. Import the optional boot injection payload (fw_cfg or a second ISO).
+# 6. Import the optional boot injection payload (fw_cfg or a medium with the
+#    injection label).
 # 7. Move /dev, /proc, /sys and the boot medium into the new root and
-#    switch_root to /sbin/init.
+#    switch_root to {{SWITCH_ROOT_INIT}}.
 
-busybox echo "=== INIT STARTING ==="
-
-# Minimal PATH - busybox provides everything
 export PATH=/bin
 
-busybox echo "Mounting proc..."
-busybox mount -t proc proc /proc || busybox echo "FAILED: mount proc"
+# Messages go to the kernel log, which prints them on every console the
+# command line names (screen and serial alike).
+msg() {
+    if [ -w /dev/kmsg ]; then
+        busybox echo "initramfs: $1" > /dev/kmsg
+    else
+        busybox echo "initramfs: $1"
+    fi
+}
 
-busybox echo "Mounting sysfs..."
-busybox mount -t sysfs sysfs /sys || busybox echo "FAILED: mount sysfs"
+# A shell on the console; leaving it panics the kernel (it is PID 1).
+emergency_shell() {
+    msg "ERROR: $1"
+    msg "Dropping to an emergency shell. Leaving it stops the machine; reboot to retry."
+    exec busybox sh
+}
 
-busybox echo "Mounting devtmpfs..."
-busybox mount -t devtmpfs devtmpfs /dev || busybox echo "FAILED: mount devtmpfs"
+busybox mount -t proc proc /proc || msg "ERROR: mounting /proc failed"
+busybox mount -t sysfs sysfs /sys || msg "ERROR: mounting /sys failed"
+busybox mount -t devtmpfs devtmpfs /dev || msg "ERROR: mounting /dev failed"
+# The archive has no device nodes, so the kernel could not open a console
+# for /init; devtmpfs has /dev/console, the console the command line names.
+[ -c /dev/console ] && exec </dev/console >/dev/console 2>&1
 
-# CRITICAL: Redirect userspace initramfs output to serial console.
-# Kernel console=ttyS0 only guarantees kernel logs, not userspace stdout/stderr.
-if [ -c /dev/ttyS0 ]; then
-    exec > /dev/ttyS0 2>&1 < /dev/ttyS0
-fi
-
-busybox echo "Basic mounts done"
+msg "{{BOOT_BANNER}}"
 
 # Load kernel modules for boot, dependencies first. recinit resolved them
-# against this kernel and stored them uncompressed for busybox insmod.
-busybox echo "Loading kernel modules..."
+# against this kernel and stored them uncompressed for busybox insmod. A
+# module the kernel already has (built in or loaded) reports EEXIST.
 for path in {{BOOT_MODULE_PATHS}}; do
-    if busybox insmod "/lib/modules/{{KERNEL_RELEASE}}/$path" 2>/dev/null; then
-        busybox echo "  Loaded ${path##*/}"
-    else
-        busybox echo "  ${path##*/}: already loaded or failed"
+    if ! out="$(busybox insmod "/lib/modules/{{KERNEL_RELEASE}}/$path" 2>&1)"; then
+        case "$out" in
+            *exists*) ;;
+            *) msg "WARNING: loading ${path##*/} failed: $out" ;;
+        esac
     fi
 done
 
-busybox echo "Parsing cmdline..."
 CMDLINE=$(busybox cat /proc/cmdline)
-busybox echo "CMDLINE: $CMDLINE"
-ROOT_LABEL=""
+ROOT_LABEL="{{ISO_LABEL}}"
 EMERGENCY=""
 BOOT_INJECTION_REQUIRED=""
 for param in $CMDLINE; do
     case "$param" in
         root=LABEL=*) ROOT_LABEL="${param#root=LABEL=}" ;;
-        emergency) EMERGENCY=1 ;;
-        boot_injection=required) BOOT_INJECTION_REQUIRED=1 ;;
+        {{CMDLINE_EMERGENCY}}) EMERGENCY=1 ;;
+        {{CMDLINE_BOOT_INJECTION_REQUIRED}}) BOOT_INJECTION_REQUIRED=1 ;;
     esac
 done
 
-[ -z "$ROOT_LABEL" ] && ROOT_LABEL="{{ISO_LABEL}}"
-busybox echo "ROOT_LABEL: $ROOT_LABEL"
-
-msg() {
-    busybox echo "initramfs: $1"
-}
-
-debug() {
-    busybox echo "DEBUG: $1"
-}
-
-emergency_shell() {
-    msg "ERROR: $1"
-    msg "Dropping to emergency shell. Type 'exit' to retry boot."
-    exec busybox sh
-}
-
-msg "{{BOOT_BANNER}}"
-msg "Searching for boot device with label '$ROOT_LABEL'..."
-
-# Wait for block devices to appear (USB/SATA may be slow)
-busybox echo "Sleeping 1s for devices..."
-busybox sleep 1
-
-busybox echo "Block devices:"
-busybox ls -la /dev/sr* /dev/sd* /dev/vd* /dev/nvme* 2>/dev/null || busybox echo "(none found)"
-
-# Additional wait for slower devices
-if [ ! -e /dev/sr0 ] && [ ! -e /dev/sda ]; then
-    msg "Waiting for block devices..."
-    busybox sleep 2
-fi
-
-# The boot medium is the first probe device that mounts and has /boot.
+# The boot medium is the device with the medium's label. Storage drivers
+# probe asynchronously (USB, NVMe), so wait for it until the deadline.
+msg "Searching for the boot medium labelled '$ROOT_LABEL'..."
 BOOT_DEV=""
-DEVICES="{{BOOT_DEVICES}}"
-
-busybox echo "Searching boot media devices: $DEVICES"
-
-for dev in $DEVICES; do
-    [ -b "$dev" ] || continue
-    debug "Trying boot media device: $dev"
-    if ! busybox mount -o ro "$dev" /mnt 2>&1; then
-        debug "  Mount failed"
-        continue
+waited=0
+while :; do
+    BOOT_DEV="$(busybox findfs "LABEL=$ROOT_LABEL" 2>/dev/null)"
+    [ -n "$BOOT_DEV" ] && break
+    if [ "$waited" -ge {{MEDIA_DEADLINE_SECS}} ]; then
+        msg "No device has the label '$ROOT_LABEL' after {{MEDIA_DEADLINE_SECS}}s."
+        msg "Kernel cmdline: $CMDLINE"
+        msg "Block devices: $(busybox blkid | busybox tr '\n' ';')"
+        emergency_shell "Boot medium not found"
     fi
-
-    if [ -d /mnt/boot ]; then
-        BOOT_DEV="$dev"
-        msg "Found boot media device: $dev"
-        break
-    fi
-
-    busybox umount /mnt 2>/dev/null
+    busybox sleep 1
+    waited=$((waited + 1))
 done
-
-if [ -z "$BOOT_DEV" ]; then
-    msg "ERROR: Could not find boot media device"
-    msg ""
-    msg "Kernel cmdline: $CMDLINE"
-    msg ""
-    msg "Available block devices:"
-    busybox ls -la /dev/sd* /dev/sr* /dev/vd* /dev/nvme* 2>/dev/null || msg "  (none found)"
-    msg ""
-    msg "Expected boot media label: $ROOT_LABEL"
-    msg ""
-    emergency_shell "Boot device not found"
+if ! busybox mount -o ro "$BOOT_DEV" {{MEDIA_MOUNT}}; then
+    emergency_shell "Mounting the boot medium $BOOT_DEV at {{MEDIA_MOUNT}} failed"
 fi
+msg "Boot medium: $BOOT_DEV"
 
-# Emergency shell requested via kernel cmdline?
 if [ -n "$EMERGENCY" ]; then
-    msg "Emergency shell requested via kernel cmdline."
-    msg "Boot device mounted at /mnt"
-    msg "Type 'exit' to continue boot."
+    msg "Shell requested on the kernel command line ({{CMDLINE_EMERGENCY}}); the boot medium is at {{MEDIA_MOUNT}}."
+    msg "Type 'exit' to continue booting."
     busybox sh
 fi
 
-busybox mkdir -p /rootfs /live-overlay /overlay /overlay/upper /overlay/work /newroot /probe
-
-part_name() {
-    base="$1"
-    num="$2"
-    case "$base" in
-        *[0-9]) busybox echo "${base}p${num}" ;;
-        *) busybox echo "${base}${num}" ;;
-    esac
+# An EROFS payload file on the medium (busybox mount attaches a loop device
+# for a file).
+mount_payload() {
+    busybox mount -t erofs -o ro "$1" "$2" || emergency_shell "Mounting the $3 payload $1 (EROFS) failed"
 }
 
-find_payload_partition() {
-    want="$1"
-    for base in $DEVICES; do
-        [ -b "$base" ] || continue
-        for n in {{PAYLOAD_PARTITIONS}}; do
-            part="$(part_name "$base" "$n")"
-            [ -b "$part" ] || continue
-            if ! busybox mount -t erofs -o ro "$part" /probe 2>/dev/null; then
-                continue
-            fi
-            role="$(busybox cat /probe/{{PAYLOAD_ROLE_FILE}} 2>/dev/null)"
-            busybox umount /probe 2>/dev/null
-            if [ "$role" = "$want" ]; then
-                busybox echo "$part"
-                return 0
-            fi
-        done
-    done
-    return 1
-}
+ROOTFS_SRC="{{MEDIA_MOUNT}}{{ROOTFS_PATH}}"
+[ -f "$ROOTFS_SRC" ] || emergency_shell "{{ROOTFS_MISSING_MESSAGE}} (no {{ROOTFS_PATH}} on $BOOT_DEV)"
+msg "Mounting the rootfs payload $ROOTFS_SRC"
+mount_payload "$ROOTFS_SRC" {{ROOTFS_MOUNT}} rootfs
 
-resolve_payload_source() {
-    role="$1"
-    path="$2"
-    part="$(find_payload_partition "$role")"
-    if [ -n "$part" ]; then
-        busybox echo "$part"
-        return 0
-    fi
-
-    if [ -n "$path" ] && [ -f "/mnt$path" ]; then
-        busybox echo "/mnt$path"
-        return 0
-    fi
-
-    return 1
-}
-
-mount_erofs_payload() {
-    src="$1"
-    dst="$2"
-    label="$3"
-    case "$src" in
-        /mnt*)
-            case "$src" in
-                *.erofs)
-                    msg "Setting up loop device for $label payload..."
-                    busybox mknod /dev/loop0 b 7 0 2>/dev/null || true
-                    if ! busybox losetup /dev/loop0 "$src"; then
-                        busybox echo "$label: losetup failed, trying direct mount..."
-                        if ! busybox mount -t erofs -o ro "$src" "$dst"; then
-                            emergency_shell "Failed to mount $label. Is CONFIG_EROFS_FS=y in kernel?"
-                        fi
-                    else
-                        if ! busybox mount -t erofs -o ro /dev/loop0 "$dst"; then
-                            busybox echo "$label: loop mount failed, trying direct mount..."
-                            if ! busybox mount -t erofs -o ro "$src" "$dst"; then
-                                emergency_shell "Failed to mount $label. Is CONFIG_EROFS_FS=y in kernel?"
-                            fi
-                        fi
-                    fi
-                    ;;
-                *)
-                    if ! busybox mount -t erofs -o ro "$src" "$dst"; then
-                        emergency_shell "Failed to mount $label as EROFS."
-                    fi
-                    ;;
-            esac
-            ;;
-        *)
-            if ! busybox mount -t erofs -o ro "$src" "$dst"; then
-                emergency_shell "Failed to mount $label. Is CONFIG_EROFS_FS=y in kernel?"
-            fi
-            ;;
-    esac
-}
-
-ROOTFS_SRC="$(resolve_payload_source {{ROLE_ROOTFS}} "{{ROOTFS_PATH}}")"
-if [ -z "$ROOTFS_SRC" ]; then
-    emergency_shell "{{ROOTFS_MISSING_MESSAGE}} (missing partition role {{ROLE_ROOTFS}} or file {{ROOTFS_PATH}})"
-fi
-msg "Mounting rootfs payload: $ROOTFS_SRC"
-mount_erofs_payload "$ROOTFS_SRC" /rootfs "rootfs"
-
-LIVE_OVERLAY=""
-OVERLAY_SRC="$(resolve_payload_source {{ROLE_OVERLAY}} "{{LIVE_OVERLAY_IMAGE_PATH}}")"
-if [ -n "$OVERLAY_SRC" ]; then
-    msg "Mounting live overlay payload: $OVERLAY_SRC"
-    mount_erofs_payload "$OVERLAY_SRC" /live-overlay "live overlay"
-    busybox echo "Live overlay mounted from $OVERLAY_SRC"
-    LIVE_OVERLAY="/live-overlay"
-else
-    msg "No live overlay payload found (continuing without live overlay)"
+# OverlayFS lowerdir lists the higher layer first: the live overlay payload
+# (when the medium has one) over the rootfs. Writes go to a tmpfs.
+LOWERDIR="{{ROOTFS_MOUNT}}"
+OVERLAY_SRC=""
+if [ -f "{{MEDIA_MOUNT}}{{LIVE_OVERLAY_IMAGE_PATH}}" ]; then
+    OVERLAY_SRC="{{MEDIA_MOUNT}}{{LIVE_OVERLAY_IMAGE_PATH}}"
+    msg "Mounting the live overlay payload $OVERLAY_SRC"
+    mount_payload "$OVERLAY_SRC" {{LIVE_OVERLAY_MOUNT}} "live overlay"
+    LOWERDIR="{{LIVE_LOWERDIR}}"
 fi
 
-# Create overlay filesystem with THREE layers:
-# 1. Lower (bottom): erofs - the base system (read-only)
-# 2. Middle: live-overlay - live-specific configs from ISO payload image (read-only)
-# 3. Upper (top): tmpfs - runtime writes (read-write)
-#
-# OverlayFS syntax: lowerdir=<higher>:<lower> (colon-separated, rightmost is lowest)
-# With live overlay payload: lowerdir=/live-overlay:/rootfs (mount point still named /rootfs)
-# Without live overlay: lowerdir=/rootfs
-NEWROOT="/newroot"
-msg "Creating overlay filesystem..."
-busybox mount -t tmpfs -o size=50% tmpfs /overlay
-busybox mkdir -p /overlay/upper /overlay/work
-
-if [ -n "$LIVE_OVERLAY" ]; then
-    # THREE-LAYER OVERLAY (live boot with payload image):
-    # - /live-overlay takes precedence over /rootfs
-    # - /overlay/upper takes precedence over everything (writes go here)
-    msg "Using three-layer overlay (live boot with autologin)"
-    if ! busybox mount -t overlay overlay \
-        -o lowerdir=/live-overlay:/rootfs,upperdir=/overlay/upper,workdir=/overlay/work \
-        "$NEWROOT"; then
-        emergency_shell "Failed to create overlay. Is CONFIG_OVERLAY_FS=y in kernel?"
-    fi
-    # Create marker file so systemd/OpenRC services can detect live boot
-    busybox touch "$NEWROOT{{BOOT_MARKER}}"
-else
-    # TWO-LAYER OVERLAY (shouldn't happen from ISO, but handle gracefully)
-    msg "Using two-layer overlay (no live configs)"
-    if ! busybox mount -t overlay overlay \
-        -o lowerdir=/rootfs,upperdir=/overlay/upper,workdir=/overlay/work \
-        "$NEWROOT"; then
-        emergency_shell "Failed to create overlay. Is CONFIG_OVERLAY_FS=y in kernel?"
-    fi
-    busybox touch "$NEWROOT{{BOOT_MARKER}}"
+busybox mount -t tmpfs -o size=50% tmpfs {{OVERLAY_DIR}} || emergency_shell "Mounting the tmpfs at {{OVERLAY_DIR}} failed"
+busybox mkdir {{OVERLAY_DIR}}/upper {{OVERLAY_DIR}}/work || emergency_shell "Creating the overlay's directories failed"
+if ! busybox mount -t overlay overlay \
+    -o "lowerdir=$LOWERDIR,upperdir={{OVERLAY_DIR}}/upper,workdir={{OVERLAY_DIR}}/work" \
+    {{NEWROOT}}; then
+    emergency_shell "Mounting the overlay ($LOWERDIR) at {{NEWROOT}} failed"
 fi
+busybox touch "{{NEWROOT}}{{BOOT_MARKER}}" || emergency_shell "Creating {{BOOT_MARKER}} failed"
 
-# Runtime tmpfs mounts expected by OpenRC/system services in live mode.
-busybox mkdir -p "$NEWROOT/run" "$NEWROOT/tmp"
-busybox mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs "$NEWROOT/run" 2>/dev/null || true
-busybox mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs "$NEWROOT/tmp" 2>/dev/null || true
+busybox mkdir -p "{{NEWROOT}}/run" "{{NEWROOT}}/tmp" || emergency_shell "Creating /run and /tmp in the live root failed"
+busybox mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs "{{NEWROOT}}/run" || emergency_shell "Mounting /run in the live root failed"
+busybox mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs "{{NEWROOT}}/tmp" || emergency_shell "Mounting /tmp in the live root failed"
 
 # Stable payload handles for installers, created on the live /run so no later
-# mount hides them. File payloads point where the boot medium ends up
-# ({{LIVE_MEDIA_DIR}}, moved below); partitions keep their /dev path.
+# mount hides them. They point where the boot medium ends up
+# ({{LIVE_MEDIA_DIR}}, moved below).
 live_path() {
-    case "$1" in
-        /mnt/*) busybox echo "{{LIVE_MEDIA_DIR}}${1#/mnt}" ;;
-        *) busybox echo "$1" ;;
-    esac
+    busybox echo "{{LIVE_MEDIA_DIR}}${1#{{MEDIA_MOUNT}}}"
 }
-busybox ln -sf "$(live_path "$ROOTFS_SRC")" "$NEWROOT{{ROOTFS_HANDLE}}"
+busybox ln -s "$(live_path "$ROOTFS_SRC")" "{{NEWROOT}}{{ROOTFS_HANDLE}}" || emergency_shell "Creating {{ROOTFS_HANDLE}} failed"
 if [ -n "$OVERLAY_SRC" ]; then
-    busybox ln -sf "$(live_path "$OVERLAY_SRC")" "$NEWROOT{{OVERLAY_HANDLE}}"
+    busybox ln -s "$(live_path "$OVERLAY_SRC")" "{{NEWROOT}}{{OVERLAY_HANDLE}}" || emergency_shell "Creating {{OVERLAY_HANDLE}} failed"
 fi
 
-# Import optional host-provided boot injection payload.
-# Preferred channel:
-#   -fw_cfg name={{BOOT_INJECTION_FW_CFG}},file=<payload.env>
-# Fallback channel:
-#   additional read-only ISO containing /{{BOOT_INJECTION_FILE}}.
-# NOTE: this must run before moving /dev into $NEWROOT, otherwise /dev/sr*
-# nodes are no longer visible from the initramfs namespace.
-busybox mkdir -p "$NEWROOT{{BOOT_INJECTION_DIR}}"
-BOOT_INJECTION_PAYLOAD="$NEWROOT{{BOOT_INJECTION_ENV}}"
+# Import the optional host-provided boot injection payload: the QEMU fw_cfg
+# entry {{BOOT_INJECTION_FW_CFG}}, else a read-only medium labelled
+# {{BOOT_INJECTION_ISO_LABEL}} holding /{{BOOT_INJECTION_FILE}}. This runs before
+# /dev moves into the new root.
+busybox mkdir -p "{{NEWROOT}}{{BOOT_INJECTION_DIR}}" || emergency_shell "Creating {{BOOT_INJECTION_DIR}} failed"
+BOOT_INJECTION_PAYLOAD="{{NEWROOT}}{{BOOT_INJECTION_ENV}}"
 BOOT_INJECTION_RAW="/sys/firmware/qemu_fw_cfg/by_name/{{BOOT_INJECTION_FW_CFG}}/raw"
-BOOT_INJECTION_IMPORTED=""
-
+import_payload() {
+    busybox cat "$1" > "$BOOT_INJECTION_PAYLOAD" || emergency_shell "Importing the boot injection payload from $2 failed"
+    busybox chmod 0600 "$BOOT_INJECTION_PAYLOAD" || emergency_shell "Restricting $BOOT_INJECTION_PAYLOAD failed"
+    busybox echo "$2" > "{{NEWROOT}}{{BOOT_INJECTION_DIR}}/source" || emergency_shell "Recording the boot injection source failed"
+    msg "Imported the boot injection payload from $2"
+}
 if [ -r "$BOOT_INJECTION_RAW" ]; then
-    if busybox cat "$BOOT_INJECTION_RAW" > "$BOOT_INJECTION_PAYLOAD"; then
-        busybox chmod 0600 "$BOOT_INJECTION_PAYLOAD" 2>/dev/null || true
-        busybox echo "fw_cfg" > "$NEWROOT{{BOOT_INJECTION_DIR}}/source"
-        msg "Imported boot injection payload from fw_cfg"
-        BOOT_INJECTION_IMPORTED="1"
-    else
-        emergency_shell "Failed to import boot injection payload from fw_cfg"
+    import_payload "$BOOT_INJECTION_RAW" fw_cfg
+else
+    INJECT_DEV="$(busybox findfs "LABEL={{BOOT_INJECTION_ISO_LABEL}}" 2>/dev/null)"
+    if [ -n "$INJECT_DEV" ]; then
+        busybox mount -o ro "$INJECT_DEV" {{BOOT_INJECTION_MEDIA_MOUNT}} || emergency_shell "Mounting the boot injection medium $INJECT_DEV failed"
+        [ -r "{{BOOT_INJECTION_MEDIA_MOUNT}}/{{BOOT_INJECTION_FILE}}" ] || emergency_shell "The boot injection medium $INJECT_DEV has no {{BOOT_INJECTION_FILE}}"
+        import_payload "{{BOOT_INJECTION_MEDIA_MOUNT}}/{{BOOT_INJECTION_FILE}}" "medium:$INJECT_DEV"
+        busybox umount {{BOOT_INJECTION_MEDIA_MOUNT}} || emergency_shell "Unmounting the boot injection medium failed"
     fi
-fi
-
-if [ -z "$BOOT_INJECTION_IMPORTED" ]; then
-    BOOT_INJECTION_MEDIA_DIR="/boot-injection-media"
-    busybox mkdir -p "$BOOT_INJECTION_MEDIA_DIR"
-    for dev in {{BOOT_INJECTION_DEVICES}}; do
-        [ -b "$dev" ] || continue
-        if busybox mount -t iso9660 -o ro "$dev" "$BOOT_INJECTION_MEDIA_DIR" 2>/dev/null; then
-            if [ -r "$BOOT_INJECTION_MEDIA_DIR/{{BOOT_INJECTION_FILE}}" ]; then
-                if busybox cat "$BOOT_INJECTION_MEDIA_DIR/{{BOOT_INJECTION_FILE}}" > "$BOOT_INJECTION_PAYLOAD"; then
-                    busybox chmod 0600 "$BOOT_INJECTION_PAYLOAD" 2>/dev/null || true
-                    busybox echo "iso9660:$dev" > "$NEWROOT{{BOOT_INJECTION_DIR}}/source"
-                    msg "Imported boot injection payload from injection ISO ($dev)"
-                    BOOT_INJECTION_IMPORTED="1"
-                fi
-            fi
-            busybox umount "$BOOT_INJECTION_MEDIA_DIR" >/dev/null 2>&1 || true
-            [ -n "$BOOT_INJECTION_IMPORTED" ] && break
-        fi
-    done
-    busybox rmdir "$BOOT_INJECTION_MEDIA_DIR" >/dev/null 2>&1 || true
 fi
 
 if [ -r "$BOOT_INJECTION_PAYLOAD" ]; then
-    # SSH key handoff: the host injects SSH_AUTHORIZED_KEY (or
-    # SSH_AUTHORIZED_KEYS, ';'-separated), which becomes root's authorized_keys.
+    # SSH key handoff: the host injects {{SSH_KEY_VAR}} (or {{SSH_KEYS_VAR}},
+    # ';'-separated), which becomes root's authorized_keys.
     SSH_KEYS="$(busybox sed -n \
-        -e 's/^SSH_AUTHORIZED_KEY=//p' \
-        -e 's/^SSH_AUTHORIZED_KEYS=//p' \
-        "$BOOT_INJECTION_PAYLOAD" 2>/dev/null)"
+        -e 's/^{{SSH_KEY_VAR}}=//p' \
+        -e 's/^{{SSH_KEYS_VAR}}=//p' \
+        "$BOOT_INJECTION_PAYLOAD")"
     if [ -n "$SSH_KEYS" ]; then
-        busybox mkdir -p "$NEWROOT/root/.ssh"
-        busybox chmod 700 "$NEWROOT/root/.ssh" 2>/dev/null || true
-        busybox echo "$SSH_KEYS" | busybox tr ';' '\n' > "$NEWROOT/root/.ssh/authorized_keys"
-        busybox chmod 600 "$NEWROOT/root/.ssh/authorized_keys" 2>/dev/null || true
-        msg "Injected SSH authorized key(s) from boot payload"
+        SSH_DIR="{{NEWROOT}}{{ROOT_SSH_DIR}}"
+        busybox mkdir -p "$SSH_DIR" && busybox chmod 700 "$SSH_DIR" \
+            && busybox echo "$SSH_KEYS" | busybox tr ';' '\n' > "$SSH_DIR/authorized_keys" \
+            && busybox chmod 600 "$SSH_DIR/authorized_keys" \
+            || emergency_shell "Installing the injected SSH keys in {{ROOT_SSH_DIR}} failed"
+        msg "Injected SSH authorized key(s) from the boot payload"
     fi
 elif [ -n "$BOOT_INJECTION_REQUIRED" ]; then
-    emergency_shell "Required boot injection payload missing (boot_injection=required)"
+    emergency_shell "Required boot injection payload missing ({{CMDLINE_BOOT_INJECTION_REQUIRED}})"
 fi
 
-msg "Preparing switch_root..."
+busybox mkdir -p "{{NEWROOT}}/dev" "{{NEWROOT}}/proc" "{{NEWROOT}}/sys" "{{NEWROOT}}{{LIVE_MEDIA_DIR}}" \
+    || emergency_shell "Creating the live root's mount points failed"
+busybox mount --move /dev "{{NEWROOT}}/dev" || emergency_shell "Moving /dev into the live root failed"
+busybox mount --move /proc "{{NEWROOT}}/proc" || emergency_shell "Moving /proc into the live root failed"
+busybox mount --move /sys "{{NEWROOT}}/sys" || emergency_shell "Moving /sys into the live root failed"
+# The boot medium stays mounted at {{LIVE_MEDIA_DIR}} for the installer.
+busybox mount --move {{MEDIA_MOUNT}} "{{NEWROOT}}{{LIVE_MEDIA_DIR}}" || emergency_shell "Moving the boot medium into the live root failed"
 
-busybox mkdir -p "$NEWROOT/dev" "$NEWROOT/proc" "$NEWROOT/sys"
-
-busybox mount --move /dev "$NEWROOT/dev"
-busybox mount --move /proc "$NEWROOT/proc"
-busybox mount --move /sys "$NEWROOT/sys"
-
-# efivarfs is mounted by the live system itself, not here.
-
-# Keep the boot medium mounted at {{LIVE_MEDIA_DIR}} for installer boot assets.
-busybox mkdir -p "$NEWROOT{{LIVE_MEDIA_DIR}}"
-busybox mount --move /mnt "$NEWROOT{{LIVE_MEDIA_DIR}}"
-
-if [ ! -x "$NEWROOT/sbin/init" ] && [ ! -L "$NEWROOT/sbin/init" ]; then
-    msg "Contents of $NEWROOT/sbin:"
-    busybox ls -la "$NEWROOT/sbin/"
-    emergency_shell "/newroot/sbin/init not found or not executable"
+# The init must resolve (a dangling link fails here, not in switch_root).
+if ! busybox chroot {{NEWROOT}} /bin/sh -c 'test -x {{SWITCH_ROOT_INIT}}'; then
+    emergency_shell "{{SWITCH_ROOT_INIT}} in the live root does not resolve to an executable"
 fi
 
-msg "Switching root to live system..."
-msg ""
-
-exec busybox switch_root "$NEWROOT" /sbin/init
-
-# If we get here, something went very wrong
-emergency_shell "switch_root failed"
+msg "Switching root to the live system..."
+exec busybox switch_root {{NEWROOT}} {{SWITCH_ROOT_INIT}}

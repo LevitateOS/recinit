@@ -10,9 +10,9 @@ use std::path::Path;
 use std::process::Command;
 
 /// Install busybox as `/bin/busybox` with a `/bin/<applet>` link for each
-/// applet. Existing files win, so tools copied in earlier (util-linux
-/// `mount`, a real `sh`) are not shadowed.
-pub fn setup_busybox(busybox_src: &Path, initramfs_root: &Path) -> Result<()> {
+/// applet, and return the applets. Existing files win, so tools copied in
+/// earlier (util-linux `mount`, a real `sh`) are not shadowed.
+pub fn setup_busybox(busybox_src: &Path, initramfs_root: &Path) -> Result<Vec<String>> {
     // A bare name would otherwise be looked up on PATH, not taken as a file.
     let busybox_src = &std::path::absolute(busybox_src)?;
     let output = Command::new(busybox_src)
@@ -39,12 +39,12 @@ pub fn setup_busybox(busybox_src: &Path, initramfs_root: &Path) -> Result<()> {
         .with_context(|| format!("Failed to copy busybox from {}", busybox_src.display()))?;
     fs::set_permissions(&busybox_dst, fs::Permissions::from_mode(0o755))?;
 
-    for applet in applets {
-        let link = bin_dir.join(&applet);
+    for applet in &applets {
+        let link = bin_dir.join(applet);
         if !link.exists() && fs::symlink_metadata(&link).is_err() {
             std::os::unix::fs::symlink("busybox", &link)
                 .with_context(|| format!("Failed to create symlink for {applet}"))?;
         }
     }
-    Ok(())
+    Ok(applets)
 }

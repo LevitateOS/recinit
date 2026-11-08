@@ -134,29 +134,29 @@ pub const WANTS: &[(&str, &str)] = &[
     ("initrd-switch-root.target", "initrd-cleanup.service"),
 ];
 
-/// `rd.emergency=reboot` (the name dracut uses): instead of an emergency
-/// shell, reboot. An A/B trial boot carries it (recab), so a slot whose
-/// initramfs cannot mount its root returns to the default slot; a committed
-/// slot does not, and still gets a shell to repair it.
-pub const EMERGENCY_REBOOT_OPTION: &str = "rd.emergency=reboot";
+/// [`crate::live::FAIL_REBOOT_OPTION`]: instead of an emergency shell,
+/// reboot. An A/B trial boot carries it (recab), so a slot whose initramfs
+/// cannot mount its root returns to the default slot; a committed slot does
+/// not, and still gets a shell to repair it.
+pub use crate::live::FAIL_REBOOT_OPTION as EMERGENCY_REBOOT_OPTION;
 pub const EMERGENCY_REBOOT_UNIT: &str = "recinit-emergency-reboot.service";
 
 /// Units recinit writes itself, into `UNIT_DIR` (a `.d/` path is a drop-in).
 pub const GENERATED_UNITS: &[(&str, &str)] = &[
     (
         EMERGENCY_REBOOT_UNIT,
-        "[Unit]\n\
-Description=Reboot instead of an emergency shell (rd.emergency=reboot)\n\
+        concat!("[Unit]\n\
+Description=Reboot instead of an emergency shell (", crate::live::fail_reboot_option!(), ")\n\
 DefaultDependencies=no\n\
-ConditionKernelCommandLine=rd.emergency=reboot\n\
+ConditionKernelCommandLine=", crate::live::fail_reboot_option!(), "\n\
 \n\
 [Service]\n\
 Type=oneshot\n\
-ExecStart=/usr/bin/systemctl --no-block reboot\n",
+ExecStart=/usr/bin/systemctl --no-block reboot\n"),
     ),
     (
         "emergency.service.d/recinit-emergency-reboot.conf",
-        "[Unit]\nConditionKernelCommandLine=!rd.emergency=reboot\n",
+        concat!("[Unit]\nConditionKernelCommandLine=!", crate::live::fail_reboot_option!(), "\n"),
     ),
 ];
 
