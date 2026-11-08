@@ -14,8 +14,8 @@ pub mod payload;
 mod tiny;
 
 pub use install::{build_install_initramfs, InstallConfig, MOUNT_DIRS};
-pub use modules::{ModulePreset, INSTALL_MODULES, LIVE_MODULES};
-pub use tiny::{build_tiny_initramfs, default_boot_devices, TinyConfig, INITRAMFS_DIRS};
+pub use modules::{INSTALL_MODULES, LIVE_MODULES};
+pub use tiny::{build_tiny_initramfs, TinyConfig, INITRAMFS_DIRS};
 
 /// Default gzip level for initramfs archives.
 pub const DEFAULT_GZIP_LEVEL: u32 = 9;

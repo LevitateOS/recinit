@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use crate::busybox::setup_busybox;
 use crate::cpio::build_archive;
-use crate::modules::{KernelModules, ModulePreset};
+use crate::modules::{KernelModules, INSTALL_MODULES};
 use crate::payload;
 
 #[derive(Debug, Clone)]
@@ -23,8 +23,6 @@ pub struct InstallConfig {
     pub modules_dir: PathBuf,
 
     pub output: PathBuf,
-
-    pub module_preset: ModulePreset,
 
     /// Gzip compression level (1-9)
     pub gzip_level: u32,
@@ -45,7 +43,7 @@ pub fn build_install_initramfs(config: &InstallConfig, verbose: bool) -> Result<
     }
 
     let kernel = KernelModules::open(&config.modules_dir)?;
-    let resolved = kernel.resolve(&config.module_preset.names())?;
+    let resolved = kernel.resolve(&INSTALL_MODULES.iter().map(|m| m.to_string()).collect::<Vec<_>>())?;
     if verbose {
         println!("  Kernel release: {}", kernel.release());
     }

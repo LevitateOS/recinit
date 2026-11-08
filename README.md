@@ -33,67 +33,32 @@ recinit = { git = "https://github.com/LevitateOS/recinit" }
 recinit build-tiny \
   --modules-dir /lib/modules/$(uname -r) \
   --busybox /usr/bin/busybox \
-  --template templates/init_tiny.template \
   --output initramfs.cpio.gz \
   --iso-label MYLINUX \
-  --rootfs-path live/filesystem.erofs
+  --boot-banner "MyLinux initramfs starting..."
 ```
+
+The init script is `templates/init_tiny.template`, built in; the payload paths
+it looks for on the medium are `recinit::live`'s.
 
 ### Build Install Initramfs
 
 ```bash
 recinit build-install \
   --rootfs /path/to/rootfs-staging \
-  --output initramfs-installed.img \
-  --modules install
-```
-
-### List Module Presets
-
-```bash
-# List available presets
-recinit modules --list-presets
-
-# Show modules in a preset
-recinit modules --preset live
-recinit modules --preset install
+  --busybox /usr/bin/busybox \
+  --modules-dir /path/to/rootfs-staging/usr/lib/modules/6.12.0 \
+  --output initramfs-installed.img
 ```
 
 ## Library Usage
 
-```rust
-use recinit::{InitramfsBuilder, TinyConfig, InstallConfig, ModulePreset};
-use std::path::PathBuf;
-
-// Build live initramfs
-let builder = InitramfsBuilder::new();
-
-let config = TinyConfig {
-    modules_dir: PathBuf::from("/lib/modules/6.12.0"),
-    busybox_path: PathBuf::from("/usr/bin/busybox"),
-    template_path: PathBuf::from("templates/init_tiny.template"),
-    output: PathBuf::from("initramfs.cpio.gz"),
-    iso_label: "MYLINUX".to_string(),
-    rootfs_path: "live/filesystem.erofs".to_string(),
-    ..Default::default()
-};
-
-builder.build_tiny(config)?;
-
-// Build install initramfs
-let install_config = InstallConfig {
-    rootfs: PathBuf::from("rootfs-staging"),
-    output: PathBuf::from("initramfs-installed.img"),
-    module_preset: ModulePreset::Install,
-    ..Default::default()
-};
-
-builder.build_install(install_config)?;
-```
+`build_tiny_initramfs(&TinyConfig, verbose)` and
+`build_install_initramfs(&InstallConfig, verbose)` do what the two commands do.
 
 ## Module Presets
 
-### Live (Tiny)
+### Live (`LIVE_MODULES`, build-tiny)
 
 Minimal modules for booting from ISO/CD:
 - Virtio (QEMU support)
@@ -101,7 +66,7 @@ Minimal modules for booting from ISO/CD:
 - NVMe/SATA (real hardware)
 - Loop, EROFS, overlay (live boot)
 
-### Install (Full)
+### Install (`INSTALL_MODULES`, build-install)
 
 Complete set for any hardware:
 - All storage drivers (NVMe, SATA, USB, virtio)

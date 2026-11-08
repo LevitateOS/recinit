@@ -107,34 +107,6 @@ pub const MODULE_METADATA_FILES: &[&str] = &[
     "modules.order",
 ];
 
-/// Which modules to put in an initramfs.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ModulePreset {
-    /// Minimal modules for live ISO boot (CD-ROM, SATA, virtio, loop, overlay)
-    Live,
-    /// Full modules for installed systems (NVMe, SATA, USB, ext4, xfs, btrfs)
-    Install,
-    Custom(Vec<String>),
-}
-
-impl ModulePreset {
-    pub fn names(&self) -> Vec<String> {
-        match self {
-            Self::Live => LIVE_MODULES.iter().map(|s| s.to_string()).collect(),
-            Self::Install => INSTALL_MODULES.iter().map(|s| s.to_string()).collect(),
-            Self::Custom(list) => list.clone(),
-        }
-    }
-
-    pub fn parse_name(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "live" => Some(Self::Live),
-            "install" => Some(Self::Install),
-            _ => None,
-        }
-    }
-}
-
 /// A kernel's module tree, `/lib/modules/<release>`.
 pub struct KernelModules {
     dir: PathBuf,

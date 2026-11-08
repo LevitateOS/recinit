@@ -36,7 +36,7 @@ fn build(dir: &Path, output: &str) -> Vec<u8> {
     let status = Command::new(env!("CARGO_BIN_EXE_recinit"))
         .current_dir(dir)
         .args(["build-tiny", "--busybox", "busybox", "--modules-dir", RELEASE, "-o", output])
-        .args(["--iso-label", "TESTISO", "--set", "BOOT_BANNER=Test Live", "--set", "PRODUCT_TAG=test"])
+        .args(["--iso-label", "TESTISO", "--boot-banner", "Test Live"])
         .status()
         .unwrap();
     assert!(status.success(), "build-tiny failed");
@@ -78,7 +78,7 @@ fn tiny_initramfs_is_complete_and_reproducible() {
     assert!(!init.contains("{{"), "unfilled placeholder in /init");
     assert!(init.contains(ROOTFS_HANDLE), "/init lacks the rootfs handle");
     assert!(init.contains(RELEASE), "/init lacks the kernel release");
-    assert!(init.contains("Test Live"), "/init lacks the --set banner");
+    assert!(init.contains("Test Live"), "/init lacks the --boot-banner banner");
     assert!(init.contains("TESTISO"), "/init lacks the --iso-label");
     assert!(
         files.keys().any(|p| p.ends_with(&format!("{}.ko", LIVE_MODULES[0]))),
@@ -95,7 +95,7 @@ fn a_module_the_kernel_lacks_fails_the_build() {
     let output = Command::new(env!("CARGO_BIN_EXE_recinit"))
         .current_dir(dir.path())
         .args(["build-tiny", "--busybox", "busybox", "--modules-dir", RELEASE])
-        .args(["--iso-label", "TESTISO", "--set", "BOOT_BANNER=x", "--set", "PRODUCT_TAG=x"])
+        .args(["--iso-label", "TESTISO", "--boot-banner", "x"])
         .output()
         .unwrap();
     assert!(!output.status.success());

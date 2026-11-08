@@ -391,5 +391,3 @@ exec busybox switch_root "$NEWROOT" /sbin/init
 
 # If we get here, something went very wrong
 emergency_shell "switch_root failed"
-
-# product-artifact-tag: {{PRODUCT_TAG}}

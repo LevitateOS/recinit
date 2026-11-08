@@ -1,6 +1,6 @@
 //! Gzip-compressed newc cpio archives for initramfs images.
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use std::fs::{self, File};
@@ -57,10 +57,13 @@ fn build_cpio(root: &Path, output: &Path, gzip_level: u32) -> Result<()> {
         let path = entry.path();
 
         let rel_path = path.strip_prefix(root).unwrap_or(path);
-        let name = if rel_path.as_os_str().is_empty() {
+        let rel_name = rel_path
+            .to_str()
+            .with_context(|| format!("'{}' is not a UTF-8 name, which the archive cannot hold", path.display()))?;
+        let name = if rel_name.is_empty() {
             ".".to_string()
         } else {
-            format!("./{}", rel_path.display())
+            format!("./{rel_name}")
         };
 
         writer.add_entry(path, &name)?;
@@ -91,14 +94,19 @@ impl<W: Write> CpioWriter<W> {
             0o040000 | (metadata.permissions().mode() & 0o7777)
         } else if file_type.is_symlink() {
             0o120000 | 0o777
-        } else {
+        } else if file_type.is_file() {
             0o100000 | (metadata.permissions().mode() & 0o7777)
+        } else {
+            // Device nodes, FIFOs and sockets: the init creates its own /dev.
+            bail!("'{}' is not a file, directory or symlink, which recinit does not archive", path.display());
         };
 
+        // newc sizes are 32-bit.
+        let too_large = |_| anyhow::anyhow!("'{}' is too large for a newc archive (4 GiB at most)", path.display());
         let filesize = if file_type.is_symlink() {
-            fs::read_link(path)?.as_os_str().len() as u32
+            u32::try_from(fs::read_link(path)?.as_os_str().len()).map_err(too_large)?
         } else if file_type.is_file() {
-            metadata.len() as u32
+            u32::try_from(metadata.len()).map_err(too_large)?
         } else {
             0
         };
