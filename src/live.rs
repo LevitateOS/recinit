@@ -101,12 +101,10 @@ pub const ROOTFS_SEARCH_PATHS: &[&str] = &[
 
 /// Left from the appended-partition layout, which no build makes any more:
 /// the live init reads payload files only. The builder still writes the role
-/// file into payload images and install-tests still names the partition;
-/// both go once they stop importing these.
+/// file into payload images; these go once it stops importing them.
 pub const PAYLOAD_ROLE_FILE: &str = ".live-payload-role";
 pub const ROLE_ROOTFS: &str = "rootfs";
 pub const ROLE_OVERLAY: &str = "overlay";
-pub const ROOTFS_PAYLOAD_PARTITION: u32 = 2;
 
 /// Created in the live root so services can tell a live boot.
 pub const BOOT_MARKER: &str = "/live-boot-marker";
