@@ -8,7 +8,7 @@ Rootless initramfs builder for Linux. Build initramfs images without requiring r
 - **No external dependencies**: No dracut, mkinitcpio, or other tools needed
 - **Two initramfs types**:
   - **Tiny/Live**: Small (~5MB) busybox-based for live ISO boot
-  - **Install**: Full (~30-50MB) systemd-based for installed systems
+  - **Install**: busybox-based (~5MB) for installed systems of either distro; independent of the installed init and libc
 - **Pure Rust CPIO**: Generates CPIO archives natively without shelling out
 - **Configurable module presets**: Predefined module lists for common scenarios
 
@@ -43,6 +43,15 @@ it looks for on the medium are `recinit::live`'s.
 
 ### Build Install Initramfs
 
+One busybox `/init` (`templates/init_installed.template`) boots both installed
+systems: it loads the storage modules, finds `root=PARTUUID|UUID|LABEL=` (with
+a deadline), runs `e2fsck -p` on ext2/3/4, mounts read-only and `switch_root`s
+to `/sbin/init`. A failure reboots when the command line has
+`rd.emergency=reboot` (an A/B trial) and opens a shell otherwise. `blkid`
+(util-linux) and `e2fsck` are copied from `--rootfs` with their libraries,
+found through each binary's own ELF interpreter, so the rootfs may be glibc or
+musl. No LUKS/LVM.
+
 ```bash
 recinit build-install \
   --rootfs /path/to/rootfs-staging \
@@ -68,11 +77,7 @@ Minimal modules for booting from ISO/CD:
 
 ### Install (`INSTALL_MODULES`, build-install)
 
-Complete set for any hardware:
-- All storage drivers (NVMe, SATA, USB, virtio)
-- All common filesystems (ext4, xfs, btrfs, vfat)
-- USB HID (keyboards for LUKS prompts)
-- Device mapper (LUKS/LVM)
+Storage drivers (NVMe, SATA, USB, virtio) and ext4/vfat. No LUKS/LVM, xfs or btrfs.
 
 ## Init Script Template
 
@@ -94,14 +99,14 @@ recinit/
 │   ├── lib.rs       # Public API
 │   ├── main.rs      # CLI
 │   ├── cpio.rs      # CPIO archive building
-│   ├── elf.rs       # ELF analysis for library deps
+│   ├── elf/         # ELF analysis and copying with symlinks
 │   ├── modules.rs   # Kernel module presets
 │   ├── busybox.rs   # Busybox setup
 │   ├── tiny.rs      # Live initramfs builder
-│   ├── install.rs   # Install initramfs builder
-│   └── systemd.rs   # Systemd copying
+│   └── install.rs   # Install initramfs builder
 └── templates/
-    └── init_tiny.template  # Init script template
+    ├── init_tiny.template       # Live init
+    └── init_installed.template  # Installed-system init
 ```
 
 ## License

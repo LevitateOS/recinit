@@ -41,10 +41,12 @@ pub const LIVE_MODULES: &[&str] = &[
     "overlay",
 ];
 
-/// Kernel modules for installed system boot (systemd initramfs).
+/// Kernel modules for installed system boot (busybox initramfs).
 ///
-/// Storage drivers plus filesystem support for booting
-/// from any hardware configuration (NVMe, SATA, USB, etc.).
+/// Storage drivers and the filesystems recpart creates (ext4, vfat), so the
+/// root and the ESP mount on any hardware (NVMe, SATA, USB, virtio). Order
+/// does not matter: recinit loads dependencies first. No LUKS/LVM/xfs/btrfs
+/// modules: nothing in the initramfs or the installer uses them.
 pub const INSTALL_MODULES: &[&str] = &[
     // Virtio core (QEMU support)
     "virtio",
@@ -71,22 +73,13 @@ pub const INSTALL_MODULES: &[&str] = &[
     "ehci-hcd",
     "ehci-pci",
     "usb-storage",
-    // HID (keyboards for LUKS prompts)
-    "hid",
-    "hid-generic",
-    "usbhid",
     // Filesystems
     "ext4",
-    "xfs",
-    "btrfs",
     "fat",
     "vfat",
     "nls_cp437",
     "nls_iso8859-1",
     "nls_utf8",
-    // Device Mapper (LUKS/LVM)
-    "dm-mod",
-    "dm-crypt",
 ];
 
 /// Module metadata files needed by modprobe.
@@ -280,4 +273,31 @@ fn decompress_to(src: &Path, dst: &Path) -> Result<()> {
     }
     fs::write(dst, output.stdout)?;
     Ok(())
+}
+
+/// Install `names` (and their dependencies) decompressed under
+/// `<root>/<modules_dir>/<release>`, for busybox `insmod`, and return the
+/// init template values that load them in dependency order.
+pub fn install_boot_modules(
+    kernel_dir: &Path,
+    names: &[&str],
+    root: &Path,
+    modules_dir: &str,
+    verbose: bool,
+) -> Result<Vec<(String, String)>> {
+    let kernel = KernelModules::open(kernel_dir)?;
+    let resolved = kernel.resolve(&names.iter().map(|m| m.to_string()).collect::<Vec<_>>())?;
+    let paths = kernel.install(&resolved, root, modules_dir, true)?;
+    if verbose {
+        println!(
+            "  {} boot modules installed, {} built into kernel {}",
+            paths.len(),
+            resolved.builtin.len(),
+            kernel.release()
+        );
+    }
+    Ok(vec![
+        ("KERNEL_RELEASE".to_string(), kernel.release().to_string()),
+        ("BOOT_MODULE_PATHS".to_string(), paths.join(" ")),
+    ])
 }

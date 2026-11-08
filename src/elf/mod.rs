@@ -7,5 +7,6 @@ mod analyze;
 mod copy;
 mod paths;
 
-pub(crate) use analyze::get_all_dependencies;
-pub(crate) use copy::{copy_dir_recursive, copy_library_to};
+pub(crate) use analyze::{get_all_dependencies, interpreter};
+pub(crate) use copy::{copy_preserving, resolve_in};
+pub(crate) use paths::find_library;

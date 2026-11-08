@@ -1,0 +1,123 @@
+#!/bin/busybox sh
+# Installed-system initramfs /init, rendered by recinit: finds the root named
+# by root= on the command line, fsck's it, mounts it read-only and
+# switch_roots to {{SWITCH_ROOT_INIT}}. It knows nothing of the installed
+# system's init or libc. Paths and command-line words come from recinit's
+# protocol (src/live.rs).
+#
+# On any failure it reboots when the command line has {{FAIL_REBOOT_OPTION}}
+# (an A/B trial boot: the slot falls back to the known-good one), and opens an
+# emergency shell otherwise.
+
+export PATH=/bin
+
+msg() {
+    if [ -w /dev/kmsg ]; then
+        busybox echo "initramfs: $1" > /dev/kmsg
+    else
+        busybox echo "initramfs: $1"
+    fi
+}
+
+fail() {
+    msg "ERROR: $1"
+    if [ -n "$FAIL_REBOOT" ]; then
+        msg "{{FAIL_REBOOT_OPTION}} is set: rebooting."
+        busybox sync
+        exec busybox reboot -f
+    fi
+    msg "Dropping to an emergency shell. Leaving it stops the machine; reboot to retry."
+    exec busybox sh
+}
+
+busybox mount -t proc proc /proc || msg "ERROR: mounting /proc failed"
+busybox mount -t sysfs sysfs /sys || msg "ERROR: mounting /sys failed"
+busybox mount -t devtmpfs devtmpfs /dev || msg "ERROR: mounting /dev failed"
+[ -c /dev/console ] && exec </dev/console >/dev/console 2>&1
+
+msg "{{BOOT_BANNER}}"
+
+# Storage drivers and filesystems, dependencies first, stored uncompressed for
+# busybox insmod. A module the kernel already has reports EEXIST.
+for path in {{BOOT_MODULE_PATHS}}; do
+    if ! out="$(busybox insmod "{{MODULES_DIR}}/{{KERNEL_RELEASE}}/$path" 2>&1)"; then
+        case "$out" in
+            *exists*) ;;
+            *) msg "WARNING: loading ${path##*/} failed: $out" ;;
+        esac
+    fi
+done
+
+ROOT=""
+ROOT_FSTYPE=""
+ROOT_FLAGS=""
+FAIL_REBOOT=""
+for param in $(busybox cat /proc/cmdline); do
+    case "$param" in
+        root=*) ROOT="${param#root=}" ;;
+        rootfstype=*) ROOT_FSTYPE="${param#rootfstype=}" ;;
+        rootflags=*) ROOT_FLAGS="${param#rootflags=}" ;;
+        {{FAIL_REBOOT_OPTION}}) FAIL_REBOOT=1 ;;
+    esac
+done
+[ -n "$ROOT" ] || fail "no root= on the kernel command line"
+
+# root=PARTUUID=/UUID=/LABEL= name a device by a tag (util-linux blkid reads
+# all three); the drivers probe asynchronously, so wait for it until the
+# deadline. root=/dev/... is used as given.
+case "$ROOT" in
+    PARTUUID=*|UUID=*|LABEL=*)
+        msg "Searching for the root device $ROOT..."
+        DEV=""
+        waited=0
+        while :; do
+            DEV="$(/usr/sbin/blkid -c /dev/null -t "$ROOT" -o device | busybox head -n 1)"
+            [ -n "$DEV" ] && break
+            if [ "$waited" -ge {{MEDIA_DEADLINE_SECS}} ]; then
+                msg "Block devices: $(/usr/sbin/blkid -c /dev/null | busybox tr '\n' ';')"
+                fail "No device matches root=$ROOT after {{MEDIA_DEADLINE_SECS}}s"
+            fi
+            busybox sleep 1
+            waited=$((waited + 1))
+        done
+        ;;
+    /dev/*)
+        DEV="$ROOT"
+        waited=0
+        while [ ! -b "$DEV" ]; do
+            [ "$waited" -ge {{MEDIA_DEADLINE_SECS}} ] && fail "$DEV does not appear after {{MEDIA_DEADLINE_SECS}}s"
+            busybox sleep 1
+            waited=$((waited + 1))
+        done
+        ;;
+    *) fail "unsupported root=$ROOT (PARTUUID=, UUID=, LABEL= or /dev/...)" ;;
+esac
+msg "Root device: $DEV"
+
+[ -n "$ROOT_FSTYPE" ] || ROOT_FSTYPE="$(/usr/sbin/blkid -c /dev/null -o value -s TYPE "$DEV")"
+case "$ROOT_FSTYPE" in
+    ext2|ext3|ext4)
+        # Preen: exit 0 = clean, 1 = errors fixed, 2 = fixed and a reboot is
+        # advised (the root is not mounted yet, so continuing is safe).
+        /usr/sbin/e2fsck -p "$DEV"
+        rc=$?
+        [ "$rc" -le 3 ] || fail "fsck of $DEV failed (e2fsck exit $rc); the filesystem needs a manual repair"
+        ;;
+    "") fail "cannot tell the filesystem type of $DEV" ;;
+    *) msg "No fsck for $ROOT_FSTYPE; mounting $DEV unchecked." ;;
+esac
+
+busybox mount -t "$ROOT_FSTYPE" -o "ro${ROOT_FLAGS:+,$ROOT_FLAGS}" "$DEV" {{NEWROOT}} \
+    || fail "Mounting $DEV ($ROOT_FSTYPE) at {{NEWROOT}} failed"
+
+# The init must resolve (a dangling link fails here, not in switch_root).
+if ! busybox chroot {{NEWROOT}} /bin/sh -c 'test -x {{SWITCH_ROOT_INIT}}'; then
+    fail "{{SWITCH_ROOT_INIT}} in the root filesystem does not resolve to an executable"
+fi
+
+busybox mount --move /dev {{NEWROOT}}/dev || fail "Moving /dev into the root failed"
+busybox mount --move /proc {{NEWROOT}}/proc || fail "Moving /proc into the root failed"
+busybox mount --move /sys {{NEWROOT}}/sys || fail "Moving /sys into the root failed"
+
+msg "Switching root..."
+exec busybox switch_root {{NEWROOT}} {{SWITCH_ROOT_INIT}}

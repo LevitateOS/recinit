@@ -117,3 +117,26 @@ pub(crate) fn get_all_dependencies(
 
     Ok(all_libs)
 }
+
+/// The ELF interpreter (dynamic loader) the binary asks for, as an absolute
+/// path in its own root; `None` for a static binary. Read from the headers,
+/// so the loader may belong to a libc the host does not have.
+pub(crate) fn interpreter(binary_path: &Path) -> Result<Option<String>> {
+    let output = Command::new("readelf")
+        .args(["-l"])
+        .arg(binary_path)
+        .output()
+        .context("readelf command not found - install binutils")?;
+    if !output.status.success() {
+        bail!(
+            "readelf failed on {}: {}",
+            binary_path.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout.lines().find_map(|line| {
+        let rest = line.split("Requesting program interpreter:").nth(1)?;
+        Some(rest.trim().trim_end_matches(']').to_string())
+    }))
+}

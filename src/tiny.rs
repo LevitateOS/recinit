@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use crate::busybox::setup_busybox;
 use crate::cpio::build_archive;
-use crate::modules::{KernelModules, LIVE_MODULES};
+use crate::modules::{install_boot_modules, LIVE_MODULES};
 
 #[derive(Debug, Clone)]
 pub struct TinyConfig {
@@ -62,7 +62,7 @@ pub fn build_tiny_initramfs(config: &TinyConfig, verbose: bool) -> Result<()> {
                 missing.join(", ")
             );
         }
-        let module_vars = install_boot_modules(config, root, verbose)?;
+        let module_vars = install_boot_modules(&config.modules_dir, LIVE_MODULES, root, "lib/modules", verbose)?;
         create_init_script(config, &module_vars, root, verbose)
     })?;
 
@@ -88,35 +88,10 @@ fn create_directory_structure(root: &Path, verbose: bool) -> Result<()> {
     Ok(())
 }
 
-/// Install the boot modules (decompressed, for busybox `insmod`) and return
-/// the template values that load them in dependency order.
-fn install_boot_modules(
-    config: &TinyConfig,
-    initramfs_root: &Path,
-    verbose: bool,
-) -> Result<Vec<(String, String)>> {
-    let kernel = KernelModules::open(&config.modules_dir)?;
-    let resolved = kernel.resolve(&LIVE_MODULES.iter().map(|m| m.to_string()).collect::<Vec<_>>())?;
-    let paths = kernel.install(&resolved, initramfs_root, "lib/modules", true)?;
-    if verbose {
-        println!(
-            "  {} boot modules installed, {} built into kernel {}",
-            paths.len(),
-            resolved.builtin.len(),
-            kernel.release()
-        );
-    }
-    Ok(vec![
-        ("KERNEL_RELEASE".to_string(), kernel.release().to_string()),
-        ("BOOT_MODULE_PATHS".to_string(), paths.join(" ")),
-    ])
-}
-
 /// The live init template shipped with recinit.
 pub const DEFAULT_TEMPLATE: &str = include_str!("../templates/init_tiny.template");
 
-/// Render the init script. Every placeholder must be filled, so template and
-/// filler cannot drift apart.
+/// Render the live init script.
 fn create_init_script(
     config: &TinyConfig,
     module_vars: &[(String, String)],
@@ -126,19 +101,25 @@ fn create_init_script(
     if verbose {
         println!("Creating init script from template...");
     }
+    let mut vars = vec![
+        ("ISO_LABEL".to_string(), config.iso_label.clone()),
+        ("BOOT_BANNER".to_string(), config.boot_banner.clone()),
+    ];
+    vars.extend(module_vars.iter().cloned());
+    write_init(DEFAULT_TEMPLATE, vars, initramfs_root)
+}
 
+/// Fill a template from the live protocol's values plus `extra`, and write it
+/// as the executable `/init`. Every placeholder must be filled, so template
+/// and filler cannot drift apart.
+pub(crate) fn write_init(template: &str, extra: Vec<(String, String)>, initramfs_root: &Path) -> Result<()> {
     let mut vars: Vec<(String, String)> = crate::live::init_template_vars()
         .into_iter()
         .map(|(k, v)| (k.to_string(), v))
         .collect();
-    vars.extend([
-        ("ISO_LABEL".to_string(), config.iso_label.clone()),
-        ("BOOT_BANNER".to_string(), config.boot_banner.clone()),
-    ]);
-    vars.extend(module_vars.iter().cloned());
+    vars.extend(extra);
 
-    let template = DEFAULT_TEMPLATE.to_string();
-    let mut init_content = template;
+    let mut init_content = template.to_string();
     for (key, value) in &vars {
         init_content = init_content.replace(&format!("{{{{{key}}}}}"), value);
     }
@@ -155,10 +136,6 @@ fn create_init_script(
 
     let init_dst = initramfs_root.join("init");
     fs::write(&init_dst, &init_content)?;
-
-    let mut perms = fs::metadata(&init_dst)?.permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(&init_dst, perms)?;
-
+    fs::set_permissions(&init_dst, fs::Permissions::from_mode(0o755))?;
     Ok(())
 }

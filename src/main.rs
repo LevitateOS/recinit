@@ -51,13 +51,13 @@ enum Commands {
         gzip_level: u32,
     },
 
-    /// Build an install initramfs for booting from disk
+    /// Build the busybox initramfs that boots an installed system (either distro)
     BuildInstall {
-        /// Path to rootfs staging directory
+        /// The installed system's rootfs (fsck and blkid come from it)
         #[arg(long)]
         rootfs: PathBuf,
 
-        /// Path to static busybox binary (emergency shell)
+        /// Path to static busybox binary
         #[arg(long)]
         busybox: PathBuf,
 
@@ -72,10 +72,6 @@ enum Commands {
         /// Gzip compression level (1-9)
         #[arg(long, default_value_t = DEFAULT_GZIP_LEVEL)]
         gzip_level: u32,
-
-        /// Skip firmware copying
-        #[arg(long)]
-        no_firmware: bool,
     },
 }
 
@@ -108,7 +104,6 @@ fn main() -> Result<()> {
             modules_dir,
             output,
             gzip_level,
-            no_firmware,
         } => build_install_initramfs(
             &InstallConfig {
                 rootfs,
@@ -116,7 +111,6 @@ fn main() -> Result<()> {
                 modules_dir,
                 output,
                 gzip_level,
-                include_firmware: !no_firmware,
             },
             verbose,
         ),

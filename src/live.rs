@@ -232,6 +232,7 @@ pub fn init_template_vars() -> Vec<(&'static str, String)> {
         ("SWITCH_ROOT_INIT", SWITCH_ROOT_INIT.to_string()),
         ("MEDIA_DEADLINE_SECS", MEDIA_DEADLINE_SECS.to_string()),
         ("CMDLINE_EMERGENCY", CMDLINE_EMERGENCY.to_string()),
+        ("FAIL_REBOOT_OPTION", FAIL_REBOOT_OPTION.to_string()),
         ("CMDLINE_BOOT_INJECTION_REQUIRED", CMDLINE_BOOT_INJECTION_REQUIRED.to_string()),
     ]
 }

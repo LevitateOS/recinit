@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 /// Find a library in standard paths within a rootfs.
 ///
-/// Searches lib64, lib, and systemd private library paths.
+/// Searches lib64 and lib.
 /// The `extra_paths` parameter allows callers to add additional search paths
 /// (e.g., `/usr/libexec/sudo` for rootfs builds).
 ///
@@ -17,9 +17,6 @@ pub(crate) fn find_library(source_root: &Path, lib_name: &str, extra_paths: &[&s
         source_root.join("lib64").join(lib_name),
         source_root.join("usr/lib").join(lib_name),
         source_root.join("lib").join(lib_name),
-        // Systemd private libraries
-        source_root.join("usr/lib64/systemd").join(lib_name),
-        source_root.join("usr/lib/systemd").join(lib_name),
     ];
 
     // Add extra paths from caller
