@@ -12,9 +12,10 @@ use recinit::{build_install_initramfs, build_tiny_initramfs, InstallConfig, Tiny
 #[command(name = "recinit")]
 #[command(about = "Rootless initramfs builder for Linux")]
 #[command(version)]
+#[command(after_help = "Build an initramfs for an installed system:\n  recinit build-install --rootfs /mnt --busybox /path/to/busybox-static \\\n    --modules-dir /mnt/usr/lib/modules/<KERNEL-VERSION> --output initramfs-installed.img\n\nUse build-tiny for live ISO boot and build-install for an installed system.\nThe module tree must match the kernel you will boot. No root privileges needed.\nRun 'recinit <command> --help' for the required inputs.")]
 struct Cli {
     /// Quiet mode (suppress progress messages)
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     quiet: bool,
 
     #[command(subcommand)]
