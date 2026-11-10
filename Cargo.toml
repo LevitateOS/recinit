@@ -19,7 +19,8 @@ required-features = ["builder"]
 [features]
 default = ["builder"]
 # The initramfs builder; without it the crate is only the live protocol.
-builder = ["dep:anyhow", "dep:clap", "dep:flate2", "dep:tempfile", "dep:walkdir", "dep:target-root"]
+builder = ["inspect", "dep:anyhow", "dep:clap", "dep:tempfile", "dep:walkdir", "dep:target-root"]
+inspect = ["dep:flate2"]
 
 [dependencies]
 anyhow = { version = "1.0", optional = true }

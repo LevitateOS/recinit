@@ -52,6 +52,7 @@ pub const ROOTFS_TOOLS: &[&str] = &["blkid", "e2fsck"];
 pub const INSTALL_INIT_APPLETS: &[&str] = &[
     "sh", "mount", "insmod", "cat", "echo", "head", "tr", "sleep", "sync", "reboot", "chroot",
     "switch_root",
+    "mkdir", "cp", "mv", "rm", "chmod", "blockdev", "readlink", "ls",
 ];
 
 pub fn build_install_initramfs(config: &InstallConfig, verbose: bool) -> Result<()> {
@@ -87,6 +88,10 @@ pub fn build_install_initramfs(config: &InstallConfig, verbose: bool) -> Result<
         vars.extend([
             ("MODULES_DIR".to_string(), format!("/{MODULES_DIR}")),
             ("BOOT_BANNER".to_string(), "installed system initramfs starting...".to_string()),
+            ("IMMUTABLE_OPTION".to_string(), crate::installed::IMMUTABLE_OPTION.to_string()),
+            ("IMMUTABLE_CONFIG".to_string(), crate::installed::IMMUTABLE_CONFIG.to_string()),
+            ("SLOT_STATE_DIR".to_string(), crate::installed::SLOT_STATE_DIR.to_string()),
+            ("IMMUTABLE_INIT_MARKER".to_string(), crate::installed::IMMUTABLE_INIT_MARKER.to_string()),
         ]);
         write_init(INSTALLED_TEMPLATE, vars, root)
     })?;

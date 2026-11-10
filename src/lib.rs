@@ -15,6 +15,7 @@ mod elf;
 #[cfg(feature = "builder")]
 mod install;
 pub mod live;
+pub mod installed;
 #[cfg(feature = "builder")]
 mod modules;
 #[cfg(feature = "builder")]

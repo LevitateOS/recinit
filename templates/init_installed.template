@@ -4,6 +4,7 @@
 # switch_roots to {{SWITCH_ROOT_INIT}}. It knows nothing of the installed
 # system's init or libc. Paths and command-line words come from recinit's
 # protocol (src/live.rs).
+{{IMMUTABLE_INIT_MARKER}}
 #
 # On any failure it reboots when the command line has {{FAIL_REBOOT_OPTION}}
 # (an A/B trial boot: the slot falls back to the known-good one), and opens an
@@ -52,15 +53,22 @@ ROOT=""
 ROOT_FSTYPE=""
 ROOT_FLAGS=""
 FAIL_REBOOT=""
+IMMUTABLE=""
 for param in $(busybox cat /proc/cmdline); do
     case "$param" in
         root=*) ROOT="${param#root=}" ;;
         rootfstype=*) ROOT_FSTYPE="${param#rootfstype=}" ;;
         rootflags=*) ROOT_FLAGS="${param#rootflags=}" ;;
         {{FAIL_REBOOT_OPTION}}) FAIL_REBOOT=1 ;;
+        {{IMMUTABLE_OPTION}}) IMMUTABLE=1 ;;
     esac
 done
 [ -n "$ROOT" ] || fail "no root= on the kernel command line"
+if [ -n "$IMMUTABLE" ]; then
+    case ",$ROOT_FLAGS," in
+        *,rw,*) fail "an immutable A/B root cannot use rootflags=rw" ;;
+    esac
+fi
 
 # root=PARTUUID=/UUID=/LABEL= name a device by a tag (util-linux blkid reads
 # all three); the drivers probe asynchronously, so wait for it until the
@@ -107,8 +115,59 @@ case "$ROOT_FSTYPE" in
     *) msg "No fsck for $ROOT_FSTYPE; mounting $DEV unchecked." ;;
 esac
 
+# A read-only block device also prevents the installed init's remount service
+# (or an accidental second mount) from making the active slot writable.
+if [ -n "$IMMUTABLE" ]; then
+    busybox blockdev --setro "$DEV" || fail "Protecting the active root device failed"
+fi
 busybox mount -t "$ROOT_FSTYPE" -o "ro${ROOT_FLAGS:+,$ROOT_FLAGS}" "$DEV" {{NEWROOT}} \
     || fail "Mounting $DEV ($ROOT_FSTYPE) at {{NEWROOT}} failed"
+
+if [ -n "$IMMUTABLE" ]; then
+    # The metadata belongs to this prepared slot, never to shared state. An
+    # absent or invalid setup is a boot failure, not a writable fallback.
+    IFS=' ' read -r SLOT STATE EXTRA < {{NEWROOT}}/{{IMMUTABLE_CONFIG}} \
+        || fail "The immutable slot has no boot configuration"
+    case "$SLOT" in A|B) ;; *) fail "Invalid immutable slot" ;; esac
+    case "$STATE" in PARTUUID=*[!a-fA-F0-9-]*|PARTUUID=|"") fail "Invalid state partition" ;; PARTUUID=*) ;; *) fail "Invalid state partition" ;; esac
+    [ -z "$EXTRA" ] || fail "Invalid immutable boot configuration"
+    STATE_DEV=""
+    waited=0
+    while :; do
+        STATE_DEV="$(/usr/sbin/blkid -c /dev/null -t "$STATE" -o device | busybox head -n 1)"
+        [ -n "$STATE_DEV" ] && break
+        [ "$waited" -ge {{MEDIA_DEADLINE_SECS}} ] && fail "State partition $STATE did not appear"
+        busybox sleep 1
+        waited=$((waited + 1))
+    done
+    [ "$(busybox readlink -f "$STATE_DEV")" != "$(busybox readlink -f "$DEV")" ] \
+        || fail "The immutable root and writable state are the same partition"
+    [ "$(/usr/sbin/blkid -c /dev/null -o value -s TYPE "$STATE_DEV")" = ext4 ] \
+        || fail "The state partition is not ext4"
+    /usr/sbin/e2fsck -p "$STATE_DEV"
+    [ "$?" -le 3 ] || fail "The state partition needs a manual filesystem repair"
+    busybox mount -t ext4 -o rw "$STATE_DEV" {{NEWROOT}}/var || fail "Mounting writable state failed"
+
+    # System configuration remains on the protected root. A generation using
+    # an older writable /etc overlay must be explicitly adopted, not silently
+    # hidden by its lower directory.
+    CONFIG="{{NEWROOT}}/var/{{SLOT_STATE_DIR}}/$SLOT/etc/upper"
+    if [ -d "$CONFIG" ] && [ -n "$(busybox ls -A "$CONFIG")" ]; then
+        fail "Old writable configuration exists; adopt the merged configuration before immutable boot"
+    fi
+
+    # User data is shared, including root's home. Publish its first copy only
+    # after it is complete, so a power loss retries rather than losing files.
+    if [ ! -d {{NEWROOT}}/var/roothome ]; then
+        busybox rm -rf {{NEWROOT}}/var/.recab-roothome || fail "Clearing an interrupted root-home copy failed"
+        busybox cp -a {{NEWROOT}}/root {{NEWROOT}}/var/.recab-roothome || fail "Preserving root's home failed"
+        busybox mv {{NEWROOT}}/var/.recab-roothome {{NEWROOT}}/var/roothome || fail "Publishing root's home failed"
+    fi
+    busybox mount --bind {{NEWROOT}}/var/roothome {{NEWROOT}}/root || fail "Mounting root's home failed"
+    busybox mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs {{NEWROOT}}/run || fail "Mounting /run failed"
+    busybox mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs {{NEWROOT}}/tmp || fail "Mounting /tmp failed"
+    msg "Slot $SLOT is read-only; system configuration is read-only; user data uses writable state."
+fi
 
 # The init must resolve (a dangling link fails here, not in switch_root).
 if ! busybox chroot {{NEWROOT}} /bin/sh -c 'test -x {{SWITCH_ROOT_INIT}}'; then
