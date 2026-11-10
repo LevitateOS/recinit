@@ -5,6 +5,7 @@
 # system's init or libc. Paths and command-line words come from recinit's
 # protocol (src/live.rs).
 {{IMMUTABLE_INIT_MARKER}}
+# recab-kernel-release={{KERNEL_RELEASE}}
 #
 # On any failure it reboots when the command line has {{FAIL_REBOOT_OPTION}}
 # (an A/B trial boot: the slot falls back to the known-good one), and opens an
@@ -38,6 +39,33 @@ busybox mount -t devtmpfs devtmpfs /dev || msg "ERROR: mounting /dev failed"
 
 msg "{{BOOT_BANNER}}"
 
+ROOT=""
+ROOT_FSTYPE=""
+ROOT_FLAGS=""
+FAIL_REBOOT=""
+IMMUTABLE=""
+GENERATION=""
+BOOT_SLOT=""
+for param in $(busybox cat /proc/cmdline); do
+    case "$param" in
+        root=*) ROOT="${param#root=}" ;;
+        rootfstype=*) ROOT_FSTYPE="${param#rootfstype=}" ;;
+        rootflags=*) ROOT_FLAGS="${param#rootflags=}" ;;
+        {{FAIL_REBOOT_OPTION}}) FAIL_REBOOT=1 ;;
+        {{IMMUTABLE_OPTION}}) IMMUTABLE=1 ;;
+        recab.generation=*) GENERATION="${param#recab.generation=}" ;;
+        recab.slot=*) BOOT_SLOT="${param#recab.slot=}" ;;
+    esac
+done
+[ -n "$ROOT" ] || fail "no root= on the kernel command line"
+if [ -n "$IMMUTABLE" ]; then
+    case ",$ROOT_FLAGS," in
+        *,rw,*) fail "an immutable A/B root cannot use rootflags=rw" ;;
+    esac
+fi
+
+[ "$(busybox uname -r)" = "{{KERNEL_RELEASE}}" ] || fail "Kernel and initramfs releases differ"
+
 # Storage drivers and filesystems, dependencies first, stored uncompressed for
 # busybox insmod. A module the kernel already has reports EEXIST.
 for path in {{BOOT_MODULE_PATHS}}; do
@@ -49,26 +77,14 @@ for path in {{BOOT_MODULE_PATHS}}; do
     fi
 done
 
-ROOT=""
-ROOT_FSTYPE=""
-ROOT_FLAGS=""
-FAIL_REBOOT=""
-IMMUTABLE=""
-for param in $(busybox cat /proc/cmdline); do
-    case "$param" in
-        root=*) ROOT="${param#root=}" ;;
-        rootfstype=*) ROOT_FSTYPE="${param#rootfstype=}" ;;
-        rootflags=*) ROOT_FLAGS="${param#rootflags=}" ;;
-        {{FAIL_REBOOT_OPTION}}) FAIL_REBOOT=1 ;;
-        {{IMMUTABLE_OPTION}}) IMMUTABLE=1 ;;
-    esac
-done
-[ -n "$ROOT" ] || fail "no root= on the kernel command line"
-if [ -n "$IMMUTABLE" ]; then
-    case ",$ROOT_FLAGS," in
-        *,rw,*) fail "an immutable A/B root cannot use rootflags=rw" ;;
-    esac
-fi
+# The identity must be unique; a cloned GPT must not redirect a root/state
+# operation onto another disk with the same tag.
+find_device() {
+    MATCHED_DEV="$(/usr/sbin/blkid -c /dev/null -t "$1" -o device)"
+    [ -n "$MATCHED_DEV" ] || return 1
+    [ "$(busybox printf '%s\n' "$MATCHED_DEV" | busybox wc -l)" -eq 1 ] || fail "Partition identity is ambiguous"
+    return 0
+}
 
 # root=PARTUUID=/UUID=/LABEL= name a device by a tag (util-linux blkid reads
 # all three); the drivers probe asynchronously, so wait for it until the
@@ -79,7 +95,8 @@ case "$ROOT" in
         DEV=""
         waited=0
         while :; do
-            DEV="$(/usr/sbin/blkid -c /dev/null -t "$ROOT" -o device | busybox head -n 1)"
+            DEV=""
+            if find_device "$ROOT"; then DEV="$MATCHED_DEV"; fi
             [ -n "$DEV" ] && break
             if [ "$waited" -ge {{MEDIA_DEADLINE_SECS}} ]; then
                 msg "Block devices: $(/usr/sbin/blkid -c /dev/null | busybox tr '\n' ';')"
@@ -103,6 +120,9 @@ esac
 msg "Root device: $DEV"
 
 [ -n "$ROOT_FSTYPE" ] || ROOT_FSTYPE="$(/usr/sbin/blkid -c /dev/null -o value -s TYPE "$DEV")"
+if [ -n "$IMMUTABLE" ]; then
+    busybox blockdev --setrw "$DEV" || fail "Enabling unmounted root filesystem checks failed"
+fi
 case "$ROOT_FSTYPE" in
     ext2|ext3|ext4)
         # Preen: exit 0 = clean, 1 = errors fixed, 2 = fixed and a reboot is
@@ -131,10 +151,26 @@ if [ -n "$IMMUTABLE" ]; then
     case "$SLOT" in A|B) ;; *) fail "Invalid immutable slot" ;; esac
     case "$STATE" in PARTUUID=*[!a-fA-F0-9-]*|PARTUUID=|"") fail "Invalid state partition" ;; PARTUUID=*) ;; *) fail "Invalid state partition" ;; esac
     [ -z "$EXTRA" ] || fail "Invalid immutable boot configuration"
+    IFS=' ' read -r RECORD_VERSION RECORD_SLOT RECORD_ROOT RECORD_GENERATION PEER EXTRA < {{NEWROOT}}/{{BOOT_RECORD}} \
+        || fail "Missing finalized boot generation"
+    [ "$RECORD_VERSION" = 1 ] && [ -z "$EXTRA" ] && [ "$RECORD_SLOT" = "$SLOT" ] \
+        && [ "$BOOT_SLOT" = "$SLOT" ] && [ "$GENERATION" = "$RECORD_GENERATION" ] \
+        || fail "Boot entry and finalized root generation differ"
+    case "$GENERATION" in *[!a-f0-9]*|"") fail "Invalid generation" ;; esac
+    [ "${#GENERATION}" -eq 64 ] || fail "Invalid generation length"
+    ACTUAL_ROOT="$(/usr/sbin/blkid -c /dev/null -o value -s PARTUUID "$DEV")"
+    [ "$ACTUAL_ROOT" = "$RECORD_ROOT" ] || fail "Boot record names another root"
+    case "$PEER" in *[!a-f0-9-]*|"") fail "Invalid peer root" ;; esac
+    [ "$PEER" != "$RECORD_ROOT" ] && [ "PARTUUID=$PEER" != "$STATE" ] || fail "Peer root identity is not distinct"
+    PEER_DEV=""
+    if find_device "PARTUUID=$PEER"; then PEER_DEV="$MATCHED_DEV"; fi
+    [ -n "$PEER_DEV" ] || fail "Peer root is missing"
+    busybox blockdev --setro "$PEER_DEV" || fail "Protecting the other root failed"
     STATE_DEV=""
     waited=0
     while :; do
-        STATE_DEV="$(/usr/sbin/blkid -c /dev/null -t "$STATE" -o device | busybox head -n 1)"
+        STATE_DEV=""
+        if find_device "$STATE"; then STATE_DEV="$MATCHED_DEV"; fi
         [ -n "$STATE_DEV" ] && break
         [ "$waited" -ge {{MEDIA_DEADLINE_SECS}} ] && fail "State partition $STATE did not appear"
         busybox sleep 1
@@ -162,6 +198,10 @@ if [ -n "$IMMUTABLE" ]; then
         busybox rm -rf {{NEWROOT}}/var/.recab-roothome || fail "Clearing an interrupted root-home copy failed"
         busybox cp -a {{NEWROOT}}/root {{NEWROOT}}/var/.recab-roothome || fail "Preserving root's home failed"
         busybox mv {{NEWROOT}}/var/.recab-roothome {{NEWROOT}}/var/roothome || fail "Publishing root's home failed"
+    fi
+    busybox mkdir -p {{NEWROOT}}/var/home || fail "Preparing shared homes failed"
+    if [ ! -L {{NEWROOT}}/home ]; then
+        busybox mount --bind {{NEWROOT}}/var/home {{NEWROOT}}/home || fail "Mounting shared homes failed"
     fi
     busybox mount --bind {{NEWROOT}}/var/roothome {{NEWROOT}}/root || fail "Mounting root's home failed"
     busybox mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs {{NEWROOT}}/run || fail "Mounting /run failed"

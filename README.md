@@ -60,6 +60,22 @@ recinit build-install \
   --output initramfs-installed.img
 ```
 
+Installed A/B images now use immutable boot protocol v3. The archive records its
+kernel release; boot checks the running release, uniquely resolves partitions,
+and compares `recab.slot` and `recab.generation` with
+`/usr/lib/recab/boot-generation` on the selected root. The record also names the
+root and peer PARTUUIDs. A mismatch fails before starting installed init; trials
+request reboot, leaving firmware's known-good default as fallback. Both root
+devices are protected read-only. Ordinary `/etc` remains on the root; `/var`,
+shared homes, `/run` and `/tmp` supply explicit writable data/runtime locations.
+
+The optional `inspect` feature validates the entire gzip/newc stream, paths,
+duplicates, executable init marker/release and trailer, and reports file hashes
+and ELF architectures. Recab uses these with the release producer's kernel/module
+binding before publishing a candidate. Older installed archives must be rebuilt
+with the compatible producer; silently accepting a v2 marker would skip the
+slot/generation boot check.
+
 ## Library Usage
 
 `build_tiny_initramfs(&TinyConfig, verbose)` and

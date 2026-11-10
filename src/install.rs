@@ -41,7 +41,17 @@ const MODULES_DIR: &str = "usr/lib/modules";
 
 /// Directories the archive holds (the live protocol's mount points that the
 /// installed init uses, under the merged-usr layout).
-pub const INSTALL_DIRS: &[&str] = &["dev", "proc", "sys", "tmp", "newroot", "usr/bin", "usr/sbin", "usr/lib", "usr/lib64"];
+pub const INSTALL_DIRS: &[&str] = &[
+    "dev",
+    "proc",
+    "sys",
+    "tmp",
+    "newroot",
+    "usr/bin",
+    "usr/sbin",
+    "usr/lib",
+    "usr/lib64",
+];
 
 /// Programs the init runs from the rootfs, installed at `usr/sbin/<name>`
 /// with their libraries. `blkid` must be util-linux's: busybox's cannot
@@ -50,9 +60,29 @@ pub const ROOTFS_TOOLS: &[&str] = &["blkid", "e2fsck"];
 
 /// Busybox applets the installed init runs.
 pub const INSTALL_INIT_APPLETS: &[&str] = &[
-    "sh", "mount", "insmod", "cat", "echo", "head", "tr", "sleep", "sync", "reboot", "chroot",
+    "sh",
+    "mount",
+    "insmod",
+    "cat",
+    "echo",
+    "head",
+    "tr",
+    "sleep",
+    "sync",
+    "reboot",
+    "chroot",
     "switch_root",
-    "mkdir", "cp", "mv", "rm", "chmod", "blockdev", "readlink", "ls",
+    "mkdir",
+    "cp",
+    "mv",
+    "rm",
+    "chmod",
+    "blockdev",
+    "readlink",
+    "ls",
+    "uname",
+    "printf",
+    "wc",
 ];
 
 pub fn build_install_initramfs(config: &InstallConfig, verbose: bool) -> Result<()> {
@@ -78,20 +108,52 @@ pub fn build_install_initramfs(config: &InstallConfig, verbose: bool) -> Result<
         }
         // Last, so busybox only fills in what the rootfs tools do not provide.
         let applets = setup_busybox(&config.busybox_path, root)?;
-        let missing: Vec<&str> =
-            INSTALL_INIT_APPLETS.iter().copied().filter(|a| !applets.iter().any(|have| have == a)).collect();
+        let missing: Vec<&str> = INSTALL_INIT_APPLETS
+            .iter()
+            .copied()
+            .filter(|a| !applets.iter().any(|have| have == a))
+            .collect();
         if !missing.is_empty() {
-            bail!("{} lacks applets the installed init runs: {}", config.busybox_path.display(), missing.join(", "));
+            bail!(
+                "{} lacks applets the installed init runs: {}",
+                config.busybox_path.display(),
+                missing.join(", ")
+            );
         }
 
-        let mut vars = install_boot_modules(&config.modules_dir, INSTALL_MODULES, root, MODULES_DIR, verbose)?;
+        let mut vars = install_boot_modules(
+            &config.modules_dir,
+            INSTALL_MODULES,
+            root,
+            MODULES_DIR,
+            verbose,
+        )?;
         vars.extend([
             ("MODULES_DIR".to_string(), format!("/{MODULES_DIR}")),
-            ("BOOT_BANNER".to_string(), "installed system initramfs starting...".to_string()),
-            ("IMMUTABLE_OPTION".to_string(), crate::installed::IMMUTABLE_OPTION.to_string()),
-            ("IMMUTABLE_CONFIG".to_string(), crate::installed::IMMUTABLE_CONFIG.to_string()),
-            ("SLOT_STATE_DIR".to_string(), crate::installed::SLOT_STATE_DIR.to_string()),
-            ("IMMUTABLE_INIT_MARKER".to_string(), crate::installed::IMMUTABLE_INIT_MARKER.to_string()),
+            (
+                "BOOT_BANNER".to_string(),
+                "installed system initramfs starting...".to_string(),
+            ),
+            (
+                "IMMUTABLE_OPTION".to_string(),
+                crate::installed::IMMUTABLE_OPTION.to_string(),
+            ),
+            (
+                "IMMUTABLE_CONFIG".to_string(),
+                crate::installed::IMMUTABLE_CONFIG.to_string(),
+            ),
+            (
+                "BOOT_RECORD".to_string(),
+                crate::installed::BOOT_RECORD.to_string(),
+            ),
+            (
+                "SLOT_STATE_DIR".to_string(),
+                crate::installed::SLOT_STATE_DIR.to_string(),
+            ),
+            (
+                "IMMUTABLE_INIT_MARKER".to_string(),
+                crate::installed::IMMUTABLE_INIT_MARKER.to_string(),
+            ),
         ]);
         write_init(INSTALLED_TEMPLATE, vars, root)
     })?;
@@ -113,7 +175,12 @@ fn install_tool(rootfs: &Path, name: &str, root: &Path) -> Result<()> {
         .iter()
         .map(|dir| Path::new(dir).join(name))
         .find(|rel| rootfs.join(rel).is_symlink() || rootfs.join(rel).exists())
-        .with_context(|| format!("rootfs {} has no {name}, which the installed initramfs needs", rootfs.display()))?;
+        .with_context(|| {
+            format!(
+                "rootfs {} has no {name}, which the installed initramfs needs",
+                rootfs.display()
+            )
+        })?;
     let file = resolve_in(rootfs, &rel)?;
     if file.file_name().and_then(|n| n.to_str()) == Some("busybox") {
         bail!("rootfs {name} is a busybox applet; the installed initramfs needs the real {name} (util-linux / e2fsprogs)");
@@ -127,8 +194,12 @@ fn install_tool(rootfs: &Path, name: &str, root: &Path) -> Result<()> {
         copy_preserving(rootfs, Path::new(loader.trim_start_matches('/')), root)?;
     }
     for lib in get_all_dependencies(rootfs, &src, &[])? {
-        let found = find_library(rootfs, &lib, &[])
-            .with_context(|| format!("{name} needs {lib}, which rootfs {} does not have", rootfs.display()))?;
+        let found = find_library(rootfs, &lib, &[]).with_context(|| {
+            format!(
+                "{name} needs {lib}, which rootfs {} does not have",
+                rootfs.display()
+            )
+        })?;
         copy_preserving(rootfs, found.strip_prefix(rootfs)?, root)?;
     }
     Ok(())

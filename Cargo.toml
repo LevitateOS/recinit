@@ -20,12 +20,13 @@ required-features = ["builder"]
 default = ["builder"]
 # The initramfs builder; without it the crate is only the live protocol.
 builder = ["inspect", "dep:anyhow", "dep:clap", "dep:tempfile", "dep:walkdir", "dep:target-root"]
-inspect = ["dep:flate2"]
+inspect = ["dep:flate2", "dep:sha2"]
 
 [dependencies]
 anyhow = { version = "1.0", optional = true }
 clap = { version = "4", features = ["derive"], optional = true }
 flate2 = { version = "1", optional = true }
+sha2 = { workspace = true, optional = true }
 tempfile = { version = "3", optional = true }
 walkdir = { version = "2", optional = true }
 target-root = { path = "../recstrap/target-root", optional = true }
