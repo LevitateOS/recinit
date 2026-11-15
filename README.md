@@ -60,18 +60,26 @@ recinit build-install \
   --output initramfs-installed.img
 ```
 
-Installed A/B images use boot protocol v4 (entries with `recab.immutable`).
-The archive records its kernel release; boot checks the running release and
-uniquely resolves partitions. The booted root is locked: its block device is
-set read-only and it is mounted read-only (`rootflags=rw` is refused). Its slot
-marker `/usr/lib/recab/immutable` (`<A|B> PARTUUID=<var> PARTUUID=<other>`)
-names the shared `/var` and the other root. `/var` is mounted read-write, with
-shared homes, `/run` and `/tmp`. The other root is unlocked: its block device
-is made writable and it is mounted read-write at `/run/recab/other`. If the
-other root is missing, ambiguous or cannot be checked or mounted, the boot
-goes on without it.
+The init treats the root in one of two ways, by the kernel command line:
 
-The optional `inspect` feature validates the entire gzip/newc stream, paths,
+- With `recab.immutable` (an A/B install, boot protocol v4) the booted root is
+  locked. The init refuses `rootflags=rw`, sets the root's block device
+  read-only and mounts it read-only. The root marker
+  `/usr/lib/recab/immutable` has three fields, `<A|B> PARTUUID=<var>
+  PARTUUID=<other root>`: it names which root this is, the shared `/var` and
+  the other root. `/var` is mounted read-write, with shared homes, `/run` and
+  `/tmp`. The other root is unlocked: the init makes its block device writable,
+  checks it (at most 60 seconds) and mounts it read-write at
+  `/run/recab/other`. If the other root is missing, ambiguous, or cannot be
+  checked or mounted, the boot goes on without it.
+- Without it (a mutable install) the one root is mounted with `ro` plus the
+  command line's `rootflags=`, and there is no other root.
+
+The archive records its kernel release; the boot checks the running release and
+resolves partitions uniquely. `recab init` refuses an initramfs that is not
+this init for boot protocol v4.
+
+The `inspect` feature (on with the default `builder` feature) validates the entire gzip/newc stream, paths,
 duplicates, executable init marker/release and trailer, and reports file hashes
 and ELF architectures.
 
@@ -94,17 +102,13 @@ Minimal modules for booting from ISO/CD:
 
 Storage drivers (NVMe, SATA, USB, virtio) and ext4/vfat. No LUKS/LVM, xfs or btrfs.
 
-## Init Script Template
+## Init Script Templates
 
-The live initramfs uses a template-based init script with these variables:
-
-| Variable | Description |
-|----------|-------------|
-| `{{ISO_LABEL}}` | ISO volume label for device detection |
-| `{{ROOTFS_PATH}}` | Path to rootfs inside ISO |
-| `{{BOOT_MODULES}}` | Space-separated module names |
-| `{{BOOT_DEVICES}}` | Space-separated device paths to probe |
-| `{{LIVE_OVERLAY_IMAGE_PATH}}` | Path to live overlay payload image on ISO |
+Both inits are templates in `templates/`, filled in by the builder. The values
+for the live init (the ISO label, the payload paths on the medium, the boot
+injection names) and the words of the kernel command line come from the live
+protocol in `src/live.rs`; the installed init's values come from
+`src/installed.rs`.
 
 ## Architecture
 
@@ -118,7 +122,9 @@ recinit/
 │   ├── modules.rs   # Kernel module presets
 │   ├── busybox.rs   # Busybox setup
 │   ├── tiny.rs      # Live initramfs builder
-│   └── install.rs   # Install initramfs builder
+│   ├── install.rs   # Install initramfs builder
+│   ├── live.rs      # The live-boot protocol (paths, command-line words)
+│   └── installed.rs # The installed init's values (boot protocol, A/B check)
 └── templates/
     ├── init_tiny.template       # Live init
     └── init_installed.template  # Installed-system init
