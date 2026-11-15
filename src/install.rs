@@ -83,6 +83,7 @@ pub const INSTALL_INIT_APPLETS: &[&str] = &[
     "uname",
     "printf",
     "wc",
+    "timeout",
 ];
 
 pub fn build_install_initramfs(config: &InstallConfig, verbose: bool) -> Result<()> {
@@ -141,6 +142,10 @@ pub fn build_install_initramfs(config: &InstallConfig, verbose: bool) -> Result<
             (
                 "IMMUTABLE_CONFIG".to_string(),
                 crate::installed::IMMUTABLE_CONFIG.to_string(),
+            ),
+            (
+                "OTHER_FSCK_SECS".to_string(),
+                crate::installed::OTHER_FSCK_SECS.to_string(),
             ),
             (
                 "IMMUTABLE_INIT_MARKER".to_string(),

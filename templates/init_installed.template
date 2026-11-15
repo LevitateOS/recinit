@@ -206,9 +206,12 @@ if [ -n "$IMMUTABLE" ]; then
     fi
     if [ -n "$OTHER_DEV" ]; then
         busybox blockdev --setrw "$OTHER_DEV" || msg "WARNING: making the other root $OTHER_DEV writable failed"
-        /usr/sbin/e2fsck -p "$OTHER_DEV"
+        # Bounded: a failing disk must not hold up the boot (timeout exits 124).
+        busybox timeout -k 5 {{OTHER_FSCK_SECS}} /usr/sbin/e2fsck -p "$OTHER_DEV"
         rc=$?
-        if [ "$rc" -gt 3 ]; then
+        if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+            msg "WARNING: checking the other root $OTHER_DEV took over {{OTHER_FSCK_SECS}}s; not mounting it"
+        elif [ "$rc" -gt 3 ]; then
             msg "WARNING: the other root $OTHER_DEV needs a filesystem repair (e2fsck exit $rc); not mounting it"
         elif busybox mkdir -p {{NEWROOT}}/run/recab/other \
             && busybox mount -t ext4 -o rw,nosuid,nodev "$OTHER_DEV" {{NEWROOT}}/run/recab/other; then

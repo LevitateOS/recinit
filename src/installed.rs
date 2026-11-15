@@ -4,6 +4,9 @@
 pub const IMMUTABLE_OPTION: &str = "recab.immutable";
 /// The slot marker on each A/B root: `<A|B> PARTUUID=<var> PARTUUID=<other root>`.
 pub const IMMUTABLE_CONFIG: &str = "usr/lib/recab/immutable";
+/// Seconds the installed init lets `e2fsck -p` of the other root take before
+/// it boots on without mounting that root.
+pub const OTHER_FSCK_SECS: u32 = 60;
 pub const IMMUTABLE_INIT_MARKER: &str = "# recab-immutable-v4";
 
 #[cfg(feature = "inspect")]
