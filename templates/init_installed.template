@@ -7,9 +7,13 @@
 {{IMMUTABLE_INIT_MARKER}}
 # recab-kernel-release={{KERNEL_RELEASE}}
 #
-# On any failure it reboots when the command line has {{FAIL_REBOOT_OPTION}}
-# (an A/B trial boot: the slot falls back to the known-good one), and opens an
-# emergency shell otherwise.
+# With {{IMMUTABLE_OPTION}} (an A/B root) the booted root is locked: its block
+# device is set read-only and it is mounted read-only. The other root, named
+# by the slot marker, is unlocked: its device is made writable and it is
+# mounted read-write at /run/recab/other. The other root never stops the boot.
+#
+# On any failure it reboots when the command line has {{FAIL_REBOOT_OPTION}},
+# and opens an emergency shell otherwise.
 
 export PATH=/bin
 
@@ -44,8 +48,6 @@ ROOT_FSTYPE=""
 ROOT_FLAGS=""
 FAIL_REBOOT=""
 IMMUTABLE=""
-GENERATION=""
-BOOT_SLOT=""
 for param in $(busybox cat /proc/cmdline); do
     case "$param" in
         root=*) ROOT="${param#root=}" ;;
@@ -53,14 +55,12 @@ for param in $(busybox cat /proc/cmdline); do
         rootflags=*) ROOT_FLAGS="${param#rootflags=}" ;;
         {{FAIL_REBOOT_OPTION}}) FAIL_REBOOT=1 ;;
         {{IMMUTABLE_OPTION}}) IMMUTABLE=1 ;;
-        recab.generation=*) GENERATION="${param#recab.generation=}" ;;
-        recab.slot=*) BOOT_SLOT="${param#recab.slot=}" ;;
     esac
 done
 [ -n "$ROOT" ] || fail "no root= on the kernel command line"
 if [ -n "$IMMUTABLE" ]; then
     case ",$ROOT_FLAGS," in
-        *,rw,*) fail "an immutable A/B root cannot use rootflags=rw" ;;
+        *,rw,*) fail "a locked A/B root cannot use rootflags=rw" ;;
     esac
 fi
 
@@ -135,62 +135,39 @@ case "$ROOT_FSTYPE" in
     *) msg "No fsck for $ROOT_FSTYPE; mounting $DEV unchecked." ;;
 esac
 
-# A read-only block device also prevents the installed init's remount service
-# (or an accidental second mount) from making the active slot writable.
+# A read-only block device also keeps the installed init's remount service
+# (or an accidental second mount) from making the booted root writable.
 if [ -n "$IMMUTABLE" ]; then
-    busybox blockdev --setro "$DEV" || fail "Protecting the active root device failed"
+    busybox blockdev --setro "$DEV" || fail "Locking the booted root device failed"
 fi
 busybox mount -t "$ROOT_FSTYPE" -o "ro${ROOT_FLAGS:+,$ROOT_FLAGS}" "$DEV" {{NEWROOT}} \
     || fail "Mounting $DEV ($ROOT_FSTYPE) at {{NEWROOT}} failed"
 
 if [ -n "$IMMUTABLE" ]; then
-    # The metadata belongs to this prepared slot, never to shared state. An
-    # absent or invalid setup is a boot failure, not a writable fallback.
-    IFS=' ' read -r SLOT STATE EXTRA < {{NEWROOT}}/{{IMMUTABLE_CONFIG}} \
-        || fail "The immutable slot has no boot configuration"
-    case "$SLOT" in A|B) ;; *) fail "Invalid immutable slot" ;; esac
-    case "$STATE" in PARTUUID=*[!a-fA-F0-9-]*|PARTUUID=|"") fail "Invalid state partition" ;; PARTUUID=*) ;; *) fail "Invalid state partition" ;; esac
-    [ -z "$EXTRA" ] || fail "Invalid immutable boot configuration"
-    IFS=' ' read -r RECORD_VERSION RECORD_SLOT RECORD_ROOT RECORD_GENERATION PEER EXTRA < {{NEWROOT}}/{{BOOT_RECORD}} \
-        || fail "Missing finalized boot generation"
-    [ "$RECORD_VERSION" = 1 ] && [ -z "$EXTRA" ] && [ "$RECORD_SLOT" = "$SLOT" ] \
-        && [ "$BOOT_SLOT" = "$SLOT" ] && [ "$GENERATION" = "$RECORD_GENERATION" ] \
-        || fail "Boot entry and finalized root generation differ"
-    case "$GENERATION" in *[!a-f0-9]*|"") fail "Invalid generation" ;; esac
-    [ "${#GENERATION}" -eq 64 ] || fail "Invalid generation length"
-    ACTUAL_ROOT="$(/usr/sbin/blkid -c /dev/null -o value -s PARTUUID "$DEV")"
-    [ "$ACTUAL_ROOT" = "$RECORD_ROOT" ] || fail "Boot record names another root"
-    case "$PEER" in *[!a-f0-9-]*|"") fail "Invalid peer root" ;; esac
-    [ "$PEER" != "$RECORD_ROOT" ] && [ "PARTUUID=$PEER" != "$STATE" ] || fail "Peer root identity is not distinct"
-    PEER_DEV=""
-    if find_device "PARTUUID=$PEER"; then PEER_DEV="$MATCHED_DEV"; fi
-    [ -n "$PEER_DEV" ] || fail "Peer root is missing"
-    busybox blockdev --setro "$PEER_DEV" || fail "Protecting the other root failed"
+    # The slot marker belongs to this root, never to shared state: its slot,
+    # the shared /var partition and the other root.
+    IFS=' ' read -r SLOT STATE OTHER EXTRA < {{NEWROOT}}/{{IMMUTABLE_CONFIG}} \
+        || fail "The A/B root has no slot marker"
+    case "$SLOT" in A|B) ;; *) fail "Invalid slot in the slot marker" ;; esac
+    case "$STATE" in PARTUUID=*[!a-fA-F0-9-]*|PARTUUID=|"") fail "Invalid /var partition" ;; PARTUUID=*) ;; *) fail "Invalid /var partition" ;; esac
+    [ -z "$EXTRA" ] || fail "Invalid slot marker"
     STATE_DEV=""
     waited=0
     while :; do
         STATE_DEV=""
         if find_device "$STATE"; then STATE_DEV="$MATCHED_DEV"; fi
         [ -n "$STATE_DEV" ] && break
-        [ "$waited" -ge {{MEDIA_DEADLINE_SECS}} ] && fail "State partition $STATE did not appear"
+        [ "$waited" -ge {{MEDIA_DEADLINE_SECS}} ] && fail "The /var partition $STATE did not appear"
         busybox sleep 1
         waited=$((waited + 1))
     done
     [ "$(busybox readlink -f "$STATE_DEV")" != "$(busybox readlink -f "$DEV")" ] \
-        || fail "The immutable root and writable state are the same partition"
+        || fail "The locked root and the writable /var are the same partition"
     [ "$(/usr/sbin/blkid -c /dev/null -o value -s TYPE "$STATE_DEV")" = ext4 ] \
-        || fail "The state partition is not ext4"
+        || fail "The /var partition is not ext4"
     /usr/sbin/e2fsck -p "$STATE_DEV"
-    [ "$?" -le 3 ] || fail "The state partition needs a manual filesystem repair"
-    busybox mount -t ext4 -o rw "$STATE_DEV" {{NEWROOT}}/var || fail "Mounting writable state failed"
-
-    # System configuration remains on the protected root. A generation using
-    # an older writable /etc overlay must be explicitly adopted, not silently
-    # hidden by its lower directory.
-    CONFIG="{{NEWROOT}}/var/{{SLOT_STATE_DIR}}/$SLOT/etc/upper"
-    if [ -d "$CONFIG" ] && [ -n "$(busybox ls -A "$CONFIG")" ]; then
-        fail "Old writable configuration exists; adopt the merged configuration before immutable boot"
-    fi
+    [ "$?" -le 3 ] || fail "The /var partition needs a manual filesystem repair"
+    busybox mount -t ext4 -o rw "$STATE_DEV" {{NEWROOT}}/var || fail "Mounting the writable /var failed"
 
     # User data is shared, including root's home. Publish its first copy only
     # after it is complete, so a power loss retries rather than losing files.
@@ -206,7 +183,42 @@ if [ -n "$IMMUTABLE" ]; then
     busybox mount --bind {{NEWROOT}}/var/roothome {{NEWROOT}}/root || fail "Mounting root's home failed"
     busybox mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs {{NEWROOT}}/run || fail "Mounting /run failed"
     busybox mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs {{NEWROOT}}/tmp || fail "Mounting /tmp failed"
-    msg "Slot $SLOT is read-only; system configuration is read-only; user data uses writable state."
+    msg "Root $SLOT is locked (read-only); user data uses the writable /var."
+
+    # The other root is unlocked: writable, mounted read-write. Nothing about
+    # it stops the boot; recab copy can recreate it from the booted root.
+    OTHER_DEV=""
+    case "$OTHER" in
+        PARTUUID=*[!a-fA-F0-9-]*|PARTUUID=|"") msg "WARNING: the slot marker names no valid other root" ;;
+        PARTUUID=*)
+            # Not find_device: an ambiguous other root is skipped, not fatal.
+            OTHER_DEV="$(/usr/sbin/blkid -c /dev/null -t "$OTHER" -o device)"
+            if [ "$(busybox printf '%s\n' "$OTHER_DEV" | busybox wc -l)" -ne 1 ]; then
+                [ -n "$OTHER_DEV" ] && msg "WARNING: more than one partition is $OTHER; not mounting the other root"
+                OTHER_DEV=""
+            fi
+            ;;
+        *) msg "WARNING: the slot marker names no valid other root" ;;
+    esac
+    if [ -n "$OTHER_DEV" ] && [ "$(busybox readlink -f "$OTHER_DEV")" = "$(busybox readlink -f "$DEV")" ]; then
+        msg "WARNING: the other root is the booted root; not mounting it"
+        OTHER_DEV=""
+    fi
+    if [ -n "$OTHER_DEV" ]; then
+        busybox blockdev --setrw "$OTHER_DEV" || msg "WARNING: making the other root $OTHER_DEV writable failed"
+        /usr/sbin/e2fsck -p "$OTHER_DEV"
+        rc=$?
+        if [ "$rc" -gt 3 ]; then
+            msg "WARNING: the other root $OTHER_DEV needs a filesystem repair (e2fsck exit $rc); not mounting it"
+        elif busybox mkdir -p {{NEWROOT}}/run/recab/other \
+            && busybox mount -t ext4 -o rw,nosuid,nodev "$OTHER_DEV" {{NEWROOT}}/run/recab/other; then
+            msg "The other root $OTHER_DEV is unlocked at /run/recab/other."
+        else
+            msg "WARNING: mounting the other root $OTHER_DEV failed"
+        fi
+    elif [ -n "$OTHER" ]; then
+        msg "WARNING: the other root $OTHER was not found; not mounting it"
+    fi
 fi
 
 # The init must resolve (a dangling link fails here, not in switch_root).

@@ -162,8 +162,7 @@ pub const CMDLINE_EMERGENCY: &str = "emergency";
 /// Stop the live boot when no boot-injection payload arrives.
 pub const CMDLINE_BOOT_INJECTION_REQUIRED: &str = "boot_injection=required";
 /// An installed initramfs reboots instead of opening an emergency shell (the
-/// name dracut uses). recab puts it on an A/B trial boot's entry, so a slot
-/// whose root cannot mount returns to the known-good slot.
+/// name dracut uses), when the command line has it.
 pub const FAIL_REBOOT_OPTION: &str = fail_reboot_option!();
 
 // ---------------------------------------------------------------------------

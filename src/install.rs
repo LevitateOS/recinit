@@ -143,14 +143,6 @@ pub fn build_install_initramfs(config: &InstallConfig, verbose: bool) -> Result<
                 crate::installed::IMMUTABLE_CONFIG.to_string(),
             ),
             (
-                "BOOT_RECORD".to_string(),
-                crate::installed::BOOT_RECORD.to_string(),
-            ),
-            (
-                "SLOT_STATE_DIR".to_string(),
-                crate::installed::SLOT_STATE_DIR.to_string(),
-            ),
-            (
                 "IMMUTABLE_INIT_MARKER".to_string(),
                 crate::installed::IMMUTABLE_INIT_MARKER.to_string(),
             ),

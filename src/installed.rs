@@ -1,9 +1,10 @@
 //! The installed A/B boot contract, shared by recab and its initramfs.
+/// The kernel option of an A/B root's entry: lock the booted root, unlock
+/// and mount the other one.
 pub const IMMUTABLE_OPTION: &str = "recab.immutable";
+/// The slot marker on each A/B root: `<A|B> PARTUUID=<var> PARTUUID=<other root>`.
 pub const IMMUTABLE_CONFIG: &str = "usr/lib/recab/immutable";
-pub const BOOT_RECORD: &str = "usr/lib/recab/boot-generation";
-pub const SLOT_STATE_DIR: &str = "lib/recab/slots";
-pub const IMMUTABLE_INIT_MARKER: &str = "# recab-immutable-v3";
+pub const IMMUTABLE_INIT_MARKER: &str = "# recab-immutable-v4";
 
 #[cfg(feature = "inspect")]
 #[derive(Debug)]
@@ -23,7 +24,7 @@ pub fn inspect_installed(path: &std::path::Path) -> std::io::Result<InstalledArc
     let invalid = || {
         io::Error::new(
             io::ErrorKind::InvalidData,
-            "invalid installed initramfs or unsupported immutable boot protocol (needs v3)",
+            "invalid installed initramfs or unsupported A/B boot protocol (needs v4)",
         )
     };
     let mut archive = flate2::bufread::GzDecoder::new(BufReader::new(std::fs::File::open(path)?));

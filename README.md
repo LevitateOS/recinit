@@ -47,7 +47,7 @@ One busybox `/init` (`templates/init_installed.template`) boots both installed
 systems: it loads the storage modules, finds `root=PARTUUID|UUID|LABEL=` (with
 a deadline), runs `e2fsck -p` on ext2/3/4, mounts read-only and `switch_root`s
 to `/sbin/init`. A failure reboots when the command line has
-`rd.emergency=reboot` (an A/B trial) and opens a shell otherwise. `blkid`
+`rd.emergency=reboot` and opens a shell otherwise. `blkid`
 (util-linux) and `e2fsck` are copied from `--rootfs` with their libraries,
 found through each binary's own ELF interpreter, so the rootfs may be glibc or
 musl. No LUKS/LVM.
@@ -60,21 +60,20 @@ recinit build-install \
   --output initramfs-installed.img
 ```
 
-Installed A/B images now use immutable boot protocol v3. The archive records its
-kernel release; boot checks the running release, uniquely resolves partitions,
-and compares `recab.slot` and `recab.generation` with
-`/usr/lib/recab/boot-generation` on the selected root. The record also names the
-root and peer PARTUUIDs. A mismatch fails before starting installed init; trials
-request reboot, leaving firmware's known-good default as fallback. Both root
-devices are protected read-only. Ordinary `/etc` remains on the root; `/var`,
-shared homes, `/run` and `/tmp` supply explicit writable data/runtime locations.
+Installed A/B images use boot protocol v4 (entries with `recab.immutable`).
+The archive records its kernel release; boot checks the running release and
+uniquely resolves partitions. The booted root is locked: its block device is
+set read-only and it is mounted read-only (`rootflags=rw` is refused). Its slot
+marker `/usr/lib/recab/immutable` (`<A|B> PARTUUID=<var> PARTUUID=<other>`)
+names the shared `/var` and the other root. `/var` is mounted read-write, with
+shared homes, `/run` and `/tmp`. The other root is unlocked: its block device
+is made writable and it is mounted read-write at `/run/recab/other`. If the
+other root is missing, ambiguous or cannot be checked or mounted, the boot
+goes on without it.
 
 The optional `inspect` feature validates the entire gzip/newc stream, paths,
 duplicates, executable init marker/release and trailer, and reports file hashes
-and ELF architectures. Recab uses these with the release producer's kernel/module
-binding before publishing a candidate. Older installed archives must be rebuilt
-with the compatible producer; silently accepting a v2 marker would skip the
-slot/generation boot check.
+and ELF architectures.
 
 ## Library Usage
 
